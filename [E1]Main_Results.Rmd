@@ -1,0 +1,1369 @@
+---
+title: "[E1] Main Analaysis, N=1000 -- Effect of Aggregation on Generalizations Study Results"
+author: "Francis Nguyen, Xiaoli Qiao, Jeffrey Heer, Jessica Hullman"
+date: "12/22/2019"
+output:
+   html_document:
+      toc: true
+      toc_float:
+         collapsed: false
+         smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+## Setup our CRAN mirror for whenever we knit
+r = getOption("repos")
+r["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r)
+
+## Checks if we have packages and installs if not https://gist.github.com/stevenworthington/3178163
+ipak <- function(pkg){
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg))
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+}
+
+# usage
+packages <- c("tidyverse", "devtools", "ggplot2", "prodlim", "readr", "knitr", "ltm", "rethinking", "plyr", "dplyr", "GeneNet", "reshape", "MASS", "magrittr", "tidybayes", "svglite")
+ipak(packages)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Preliminaries
+We begin by cleaning up our data, removing responses where users chose not to include a generalization. A power analysis based on the data from a pilot suggested we would need 90 participants to detect differencs with 80% power. Following our [pre-registered analysis plan](https://osf.io/v87wd/register/5771ca429ad5a1020de2872e), we iteratively collected data and excluded datasets based on poor performance. Overall, we recruited 97 participants. One participant was excluded due to the same confidence on all trials, and six were excluded because the majority of their generalizations were not about the data they saw, per our pre-registered exclusion criteria.
+
+We subset from a total of 1941 to 1743, removing a total of 198 generalizations, representing trials where a participant did not provide a generalization for the presented stimuli or generalizations that misinterpreted the presented stimuli.
+
+```{r data_prelim, results="hide"}
+d <- read.csv("./data/[E1]N=1000-Full-Cleaned.tsv", sep="\t")
+
+d$confidence <- suppressWarnings(as.numeric(as.character(paste(d$confidence))))
+d$initSliderValue <- suppressWarnings(as.numeric(as.character(paste(d$initSliderValue))))
+sapply(d, class)
+
+df <- subset(d, d$correct!="NA")
+```
+
+<!-- ## Average Time per Study and per Trial -->
+<!-- ```{r avg_time, echo=FALSE} -->
+<!-- ## Overall time of study -->
+<!-- df_time <- d %>% -->
+<!--    subset(d$timeInMinutes >= 0, na.rm=TRUE) -->
+<!-- avg=c() -->
+<!-- for(worker in unique(df_time$workerId)) { -->
+<!--    df_temp <- subset(df_time, df_time$workerId==worker) -->
+<!--    df_temp <- df_temp[order(df_temp$trial),] -->
+<!--    avg <- cbind(avg, ((df_temp$time[nrow(df_temp)] - df_temp$time[1]))) # 1000 from ms to s, 60 for s to m -->
+<!-- } -->
+
+<!-- mean(avg) -->
+<!-- sd(avg) -->
+
+<!-- ## Time per trial -->
+<!-- avgTrial=c() -->
+<!-- for(i in 1:14) { -->
+<!--    for(worker in unique(df_time$workerId)) { -->
+<!--       df_temp <- subset(df_time, df_time$workerId==worker) -->
+<!--       df_temp <- df_temp[order(df_temp$trial),] -->
+<!--       el1 <- subset(df_temp[df_temp$trial==i,])$time[1] -->
+<!--       el2 <- subset(df_temp[df_temp$trial==i+1,])$time[1] -->
+<!--       avgTrial <- cbind(avgTrial, el2 - el1) -->
+<!--    } -->
+<!-- } -->
+<!-- mean(avgTrial, na.rm=TRUE) * 60 # to get seconds -->
+<!-- sd(avgTrial, na.rm=TRUE) * 60 -->
+<!-- ``` -->
+
+```{r avgTimeTask, echo=FALSE}
+avgTime <- c()
+for (tempWorkerId in unique(df[,'workerId'])) {
+   row <- subset(df, workerId == tempWorkerId)
+   row <- row[order(row$trial),]
+   start <- row[1, 'startTime']
+   end <- row[nrow(row), 'endTime']
+   total <- (end - start) / 1000 / 60
+   avgTime <- c(avgTime, total)
+}
+summary(avgTime)
+sd(avgTime)
+```
+
+
+# Descriptive Statistics
+We look at overall summaries of the aggregation strategy. In addition, we coded each generalization into a class as specified by our [pre-registration](https://osf.io/v87wd/register/5771ca429ad5a1020de2872e), and summarize the results.
+
+There are less generalizations made in the aggregation condition. In addition, the most common generalizations were categorized into the mean or shape classes, with the next most frequent being correlation and rank. There were extremely few variance generalizations, likely because of the strict nature of the coding for this generalization class — participants had to explicitly mention the variance of data in a view. On average per participant we encoded 3.13 ± 1.76 correlation, 6.92 ± 4.23 mean, 2.44 ± 2.13 rank, 6.81 ± 5.12 shape, 0.04 ± 0 variance generalizations.
+
+To see this better, we plot the distribution of generalizations across generalization class. We observe that participants made the most shape class generalizations with the disaggregation condition, the most rank class generalizations with the mean condition and the most mean class generalizaitons with the disaggregation with mean condition.
+```{r descriptive_stats}
+summary(df$aggStrat)
+summary(df$insightClass)
+
+suppressWarnings(ddply(df, c("aggStrat"), summarise,
+         n=nrow(df),
+         k=sum(df$aggStrat == aggStrat),
+         pbar = k/n,
+         se = sqrt(pbar*(1 - pbar)/n)))
+
+suppressWarnings(ddply(df, c("insightClass", "workerId"), summarise,
+         n=nrow(df),
+         k=sum(df$insightClass == insightClass & df$workerId == workerId))) %>%
+   ddply(c("insightClass"), summarise,
+         generalizationClassTotal=sum(k),
+         percentTotal=sum(k)/nrow(df),
+         avgNumberPerParticipant=sum(k) / 90,
+         sd=sd(k))
+
+suppressWarnings(ddply(df, c("aggStrat", "insightClass"), summarise,
+         n=nrow(df[df$aggStrat == aggStrat,]),
+         k=sum(df$aggStrat == aggStrat & df$insightClass == insightClass),
+         pbar = k/n,
+         se = sqrt(pbar*(1 - pbar)/n),
+         min=pbar-1.96*se,
+         max=pbar+1.96*se))
+```
+
+```{r descriptive_stats_plot, echo=FALSE, fig.show='hold', out.width='50%'}
+## Aggregation Strategy Faceted by Generalization Class
+df %>%
+  ddply(c("aggStrat", "insightClass"), summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        PercCorrect=Correct/(Incorrect+Correct),
+        Total=Incorrect+Correct) %>%
+  ggplot(aes(x=as.factor(aggStrat), y=Total)) + geom_bar(stat = "identity") + facet_wrap(~insightClass) +
+   xlab("Aggregation Strategy") + ylab("Count") +
+   ggtitle("Counts of Aggregation Strategy Faceted by Generalization Class") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.position=c(0.06, 0.02), legend.justification=c(0, 0),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+## Stacked bar chart of Aggregation Strategy and Generalization Class
+df %>%
+  ddply(c("aggStrat", "insightClass"), summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        PercCorrect=Correct/(Incorrect+Correct),
+        Total=Incorrect+Correct) %>%
+  ggplot(aes(x=as.factor(aggStrat), y=Total, fill=insightClass)) + geom_bar(stat = "identity") +
+   scale_fill_manual(values = c("#F9AB84", "#A9BEDD","#8D75A1", "#5C4A70", "#218771","#F37E8D")) +
+   xlab("Aggregation Strategy") + ylab("Count") +
+   ggtitle("Counts of Aggregation Strategy divided by Generalization Class") +
+   theme_light() + coord_flip() +
+   theme(plot.title = element_text(face="bold"),
+      legend.position="top", legend.justification=c(0, 0),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+df %>%
+   subset(df$trial==1) %>%
+  ddply(c("aggStrat", "insightClass"), summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        PercCorrect=Correct/(Incorrect+Correct),
+        Total=Incorrect+Correct) %>%
+  ggplot(aes(x=as.factor(aggStrat), y=Total, fill=insightClass)) + geom_bar(stat = "identity") +
+   scale_fill_manual(values = c("#F9AB84", "#A9BEDD","#8D75A1", "#5C4A70", "#218771","#F37E8D")) +
+   xlab("Aggregation Strategy") + ylab("Count") +
+   ggtitle("First Trial Counts of Aggregation Strategy divided by Generalization Class") +
+   theme_light() + coord_flip() +
+   ylim(0, 100) +
+   theme(plot.title = element_text(face="bold"),
+      legend.position="top", legend.justification=c(0, 0),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+```
+
+```{r aggStrat_95_CI, echo=FALSE, fig.show='hold', out.width='50%'}
+   suppressWarnings(ddply(df, c("aggStrat"), summarise,
+         n=nrow(df),
+         k=sum(df$aggStrat == aggStrat),
+         pbar = k/n,
+         se = sqrt(pbar*(1 - pbar)/n))) %>%
+   ggplot(aes(y=pbar, x=aggStrat)) +
+      geom_errorbar(aes(ymin=pbar-1.96*se, ymax=pbar+1.96*se), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      xlab("Aggregation Strategy") + ylab("Percentage of Total") +
+      ggtitle("Percentage of Total by Aggregation Strategy with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=6),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+```
+
+# Accuracy
+
+## Accuracy by Aggregation Strategy
+
+We calculate summary statistics for accuracy for each of our aggregation strategies to get a better sense of our data. While the aggregate condition generalizations have a lower frequency, however there is no significant difference between accuracies of aggregation strategy.
+
+```{r accuracy_agg_strat}
+df %>%
+  ddply(~aggStrat, summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        Accuracy=Correct/(Incorrect+Correct),
+        Total=Incorrect+Correct)
+
+# Accounting for differences in workers
+df_agg_accuracy <- df %>%
+   ddply(.(aggStrat, workerId), summarise,
+         Correct=sum(correct==TRUE),
+         Incorrect=sum(correct==FALSE),
+         PercCorrect=Correct/(Incorrect+Correct),
+         Total=Incorrect+Correct) %>%
+   ddply(~aggStrat, summarise,
+         N = sum((Total)),
+         meanAcc = mean(PercCorrect),
+         sd = sd(PercCorrect),
+         se = sd / sqrt(N))
+df_agg_accuracy
+```
+
+```{r accuracy_agg_strat_plot, echo=FALSE}
+ggplot(df, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) +
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+   xlab("Aggregation Strategy") + ylab("Count") +
+   ggtitle("Accuracy counts per Aggregation Strategy") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+df_agg_accuracy %>%
+   ggplot(aes(y=meanAcc, x=aggStrat)) +
+      geom_errorbar(aes(ymin=meanAcc-2*se, ymax=(meanAcc+2*se)), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      xlab("Aggregation Strategy") + ylab("Mean Accuracy") +
+      ggtitle("Aggregation Strategy Accuracy with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+```
+
+## Accuracy by Aggregation Strategy, Faceted by Generalization Class
+
+Next, we look at the the accuracy of aggregation strategy, faceted by generalization class. We also look at the breakdown in percentages per aggregation condition (PercTotalofAggStrat). We plot the results for visual aid.
+<!-- We find that participants are the most accurate for mean class generalizations in the mean condition, mean and shape classes generalizations with the disaggregated with means condition, and shape class generalizations with the disaggregated condition.  -->
+
+```{r, accuracy_insight_class, echo=FALSE}
+suppressWarnings(ddply(df, .(aggStrat,insightClass), summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        Total=Incorrect+Correct,
+        Accuracy=Correct/(Incorrect+Correct),
+        PercTotalofAggStrat=(Incorrect+Correct)/sum(df$aggStrat == aggStrat)))
+
+# agg  - corr 20.3, mean 43.9, rank 17.8, shape 17.8, variance 0.2
+# mean - corr 15.7, mean 39.2, rank 11.3, shape 33.1, variance 0.3
+# disag- corr 13.2, mean 25.0, rank 9.4, shape 52.2, variance 0.2
+```
+
+```{r accuracy_insight_class_plot, echo=FALSE}
+ggplot(df, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass) +
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+   xlab("Aggregation Strategy") + ylab("Count") +
+   ggtitle("Accuracy counts per Aggregation Strategy faceted by Generalization Class") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+```
+
+## Accuracy by Data Type Combination
+We analyze accuracy with respect to data type combination (univariate, 1 quantitative x 1 nominal, 2 quantitative)
+
+```{r accuracy data type combination, echo=FALSE}
+df$dataTypeCombination <- as.factor(ifelse(df$datasetId <= 5, "univariate", ifelse(df$datasetId <= 10 & df$datasetId > 5, "nominalBivariate", "quantBivariate")))
+
+df %>%
+  ddply(~dataTypeCombination, summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        Accuracy=Correct/(Incorrect+Correct),
+        Total=Incorrect+Correct)
+
+df %>%
+  ddply(.(dataTypeCombination, aggStrat), summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        Accuracy=Correct/(Incorrect+Correct),
+        Total=Incorrect+Correct)
+```
+```{r datatypecombination accuracy, echo=FALSE}
+ggplot(df, aes(x=dataTypeCombination)) + geom_bar(aes(fill=correct)) +
+   # facet_wrap(~insightClass) +
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+   xlab("Data Type Combination") + ylab("Count") +
+   ggtitle("Accuracy counts per Data Type Combination") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+ggplot(df, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) +
+   facet_wrap(~dataTypeCombination) +
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+   xlab("Data Type Combination") + ylab("Count") +
+   ggtitle("Accuracy counts per Data Type Combination by Aggregation Strategy") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+```
+
+```{r data type accuracy 95 interval, echo=FALSE}
+df_data_type_accuracy <- df %>%
+   ddply(.(dataTypeCombination, workerId), summarise,
+         Correct=sum(correct==TRUE),
+         Incorrect=sum(correct==FALSE),
+         PercCorrect=Correct/(Incorrect+Correct),
+         Total=Incorrect+Correct) %>%
+   ddply(~dataTypeCombination, summarise,
+         N = sum((Total)),
+         meanAcc = mean(PercCorrect),
+         sd = sd(PercCorrect),
+         se = sd / sqrt(N))
+df_data_type_accuracy
+
+df_data_type_agg_strat_accuracy <- df %>%
+   ddply(.(dataTypeCombination, aggStrat, workerId), summarise,
+         Correct=sum(correct==TRUE),
+         Incorrect=sum(correct==FALSE),
+         PercCorrect=Correct/(Incorrect+Correct),
+         Total=Incorrect+Correct) %>%
+   ddply(.(dataTypeCombination, aggStrat), summarise,
+         N = sum((Total)),
+         meanAcc = mean(PercCorrect),
+         sd = sd(PercCorrect),
+         se = sd / sqrt(N))
+df_data_type_agg_strat_accuracy
+
+# df_data_type_accuracy <- df %>%
+#    ddply(.(dataTypeCombination), summarise,
+#          Correct=sum(correct==TRUE),
+#          Incorrect=sum(correct==FALSE),
+#          PercCorrect=Correct/(Incorrect+Correct),
+#          Total=Incorrect+Correct) %>%
+#    ddply(~dataTypeCombination, summarise,
+#          N = sum((Total)),
+#          meanAcc = mean(PercCorrect),
+#          sd = sd(PercCorrect),
+#          se = sd / sqrt(N))
+# df_data_type_accuracy
+#
+# df_data_type_agg_strat_accuracy <- df %>%
+#    ddply(.(dataTypeCombination, aggStrat), summarise,
+#          Correct=sum(correct==TRUE),
+#          Incorrect=sum(correct==FALSE),
+#          PercCorrect=Correct/(Incorrect+Correct),
+#          Total=Incorrect+Correct) %>%
+#    ddply(.(dataTypeCombination, aggStrat), summarise,
+#          N = sum((Total)),
+#          meanAcc = mean(PercCorrect),
+#          sd = sd(PercCorrect),
+#          se = sd / sqrt(N))
+# df_data_type_agg_strat_accuracy
+```
+
+```{r data_type_accuracy_95_plot, echo=FALSE}
+df_data_type_accuracy %>%
+   ggplot(aes(y=meanAcc, x=dataTypeCombination)) +
+      geom_errorbar(aes(ymin=meanAcc-2*se, ymax=(meanAcc+2*se)), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      xlab("Data Type Combination") + ylab("Mean Accuracy") +
+      ggtitle("Data Type Combination Accuracy with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+```
+```{r data_type_agg_strat_accuracy_95_plot, echo=FALSE}
+df_data_type_agg_strat_accuracy %>%
+   ggplot(aes(y=meanAcc, x=aggStrat)) +
+      facet_wrap(~dataTypeCombination) +
+      geom_errorbar(aes(ymin=meanAcc-2*se, ymax=(meanAcc+2*se)), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      xlab("Data Type Combination") + ylab("Mean Accuracy") +
+      ggtitle("Acc. Data Type Combination by Aggregation Strategy & 95% CIs") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+```
+
+
+## Bayesian Models Setup
+We'll run some Bayesian regressions. First let's set up the data for the modeling.
+```{r bayesian models setup, include=FALSE}
+#### Setup our Bayesian models ####
+myvars <- c("workerId", "aggStrat", "specId", "correct", "trial", "effectSizeMagnitude", "effectSizeMagnitudeRemoveNulls", "dichotomous", "quantitativePrediction", "confidence", "datasetId")
+dstan <- df[myvars]
+dstan$aggr <- ifelse(dstan$aggStrat=="mean", 1, 0)
+dstan$mmean <- ifelse(dstan$aggStrat=="disagg+mean", 1, 0)
+dstan$noaggr <- ifelse(dstan$aggStrat=="disagg", 1, 0)
+dstan$worker_id <- as.integer(as.factor(dstan$workerId))
+dstan$dataset_id <- as.integer(paste(dstan$datasetId))
+
+# summary(dstan$worker_id)
+
+#for (i in 1:nrow(dstan)){
+#  if(dstan$worker_id[i] >= 49) {
+#    dstan$worker_id[i] <- dstan$worker_id[i]-1
+#  }
+#}
+
+#dstan$worker_id <- as.integer(dstan$worker_id)
+dstan$spec_ID <- dstan$specId + 1
+
+keep <- c("bnoagg", "bmean")
+# keep <- c("a","bnoagg", "bmean", "btrial")
+```
+
+```{r violin_plots_for_models, include=FALSE}
+
+### Flat violin plots: https://gist.github.com/dgrtwo/eb7750e74997891d7c20
+geom_flat_violin <- function(mapping = NULL, data = NULL, stat = "ydensity",
+                             position = "dodge", trim = TRUE, scale = "area",
+                             show.legend = NA, inherit.aes = TRUE, ...) {
+   layer(
+      data = data,
+      mapping = mapping,
+      stat = stat,
+      geom = GeomFlatViolin,
+      position = position,
+      show.legend = show.legend,
+      inherit.aes = inherit.aes,
+      params = list(
+         trim = trim,
+         scale = scale,
+         ...
+      )
+   )
+}
+
+GeomFlatViolin <-
+   ggproto("GeomFlatViolin", Geom,
+           setup_data = function(data, params) {
+              data$width <- data$width %||%
+                 params$width %||% (resolution(data$x, FALSE) * 0.9)
+
+              # ymin, ymax, xmin, and xmax define the bounding rectangle for each group
+              data %>%
+                 group_by(group) %>%
+                 mutate(ymin = min(y),
+                        ymax = max(y),
+                        xmin = x,
+                        xmax = x + width / 2)
+           },
+
+   draw_group = function(data, panel_scales, coord) {
+      # Find the points for the line to go all the way around
+      data <- transform(data, xminv = x,
+                        xmaxv = x + violinwidth * (xmax - x))
+
+      # Make sure it's sorted properly to draw the outline
+      newdata <- rbind(plyr::arrange(transform(data, x = xminv), y),
+                       plyr::arrange(transform(data, x = xmaxv), -y))
+
+      # Close the polygon: set first and last point the same
+      # Needed for coord_polar and such
+      newdata <- rbind(newdata, newdata[1,])
+
+      ggplot2:::ggname("geom_flat_violin", GeomPolygon$draw_panel(newdata, panel_scales, coord))
+   },
+
+   draw_key = draw_key_polygon,
+
+   default_aes = aes(weight = 1, colour = "grey20", fill = "white", size = 0.5,
+                     alpha = NA, linetype = "solid"),
+
+   required_aes = c("x", "y")
+   )
+
+
+#### Plotting function to generate violin plots per model ####
+plot_model_mu_coefs = function(m, model_variable, odds_ratio=FALSE) {
+
+   #only keep the following columns since we don't want each
+   # keep <- c("a", "btrial", "bnoagg", "bmean", "sigma_spec", "sigma_worker")
+   #m_v_interc_specId
+
+  mu_coefs <- m %>%
+    extract.samples() %>%  #only want intercept, btrial, bnoagg, bmean, sigma spec, sigma worker, each of these is a column
+    as.data.frame() #%>%
+
+  # mu_coefs[ , !names(mu_coefs) %in% remove]
+   # transmute(
+  #    intercept = Intercept,
+     # discrete = mu_bd,
+    #  predict = mu_bp,
+    #  `discrete*predict` = mu_bdp,
+    #  rules = mu_br,
+  #    trial = trial
+   # ) #%>%
+
+   model_output <- precis(m, depth=1, prob=0.95)@output[keep,]
+   colnames(model_output)[3] <- "lower"
+   colnames(model_output)[4] <- "upper"
+   model_output$variable <- row.names(model_output)
+   mu_coefs_plot <- gather(data=mu_coefs[keep], key=item, value=value)
+
+   if(odds_ratio) {
+      ggplot() +
+      # geom_violin(fill = "black", color = NA) +
+      geom_flat_violin(data=mu_coefs_plot, aes(x = reorder(item, desc(item)), y = exp(value)), fill="gray", color='gray') +
+      geom_errorbar(data=model_output, aes(x=variable, ymin=exp(lower), ymax=exp(upper), size=2), width=0, position=position_dodge(0.1)) +
+      geom_point(data=model_output, aes(x=variable, y=exp(Mean), size = 3)) +
+      # todo add error bars
+      geom_hline(yintercept = 1, colour = "black", linetype = 2, alpha=.6) +
+      ggtitle(paste("Predicting", model_variable, sep=" ")) +
+      theme(axis.text=element_text(size=18),
+         panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+         panel.background = element_rect(fill = "white", color="grey50"),
+         plot.title = element_text(face="bold"),
+         legend.position="none") +
+         labs(x = "Coefficients (mu)", y = "") +
+       coord_flip()
+   } else {
+      ggplot() +
+      # geom_violin(fill = "black", color = NA) +
+      geom_flat_violin(data=mu_coefs_plot, aes(x = reorder(item, desc(item)), y = value), fill="gray", color='gray') +
+      geom_errorbar(data=model_output, aes(x=variable, ymin=lower, ymax=upper, size=2), width=0, position=position_dodge(0.1)) +
+      geom_point(data=model_output, aes(x=variable, y=Mean, size = 3)) +
+      # todo add error bars
+      geom_hline(yintercept = 0, colour = "black", linetype = 2, alpha=.6) +
+      ggtitle(paste("Predicting", model_variable, sep=" ")) +
+      theme(axis.text=element_text(size=18),
+         panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+         panel.background = element_rect(fill = "white", color="grey50"),
+         plot.title = element_text(face="bold"),
+         legend.position="none") +
+         labs(x = "Coefficients (mu)", y = "") +
+       coord_flip()
+   }
+
+   # mu_coefs_plot %>%
+   #    ggplot(aes(x = reorder(item, desc(item)), y = exp(value))) +
+   #    geom_halfeyeh() +
+   #    geom_hline(yintercept = 0, colour = "grey60", linetype = 2, alpha=.2) +
+   #    ggtitle(paste("Predicting", model_variable, sep=" ")) +
+   #    theme(axis.text=element_text(size=18),
+   #       panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+   #       panel.background = element_rect(fill = "white", color="grey50"),
+   #       plot.title = element_text(face="bold")) +
+   #       labs(x = "Coefficients (mu)", y = "") +
+   #     coord_flip()
+}
+```
+
+## Accuracy Bayesian Model
+
+We run a hierarchical logistic regression model to evaluate the impact of aggregation strategy on accuracy as per our pre-registration. We report the results as the distribution of posterior mean estimates for effects of both aggregation strategies and trial and the standard eviation for varying intercepts of participant ID and view ID. We find that there doesn't seem to be an evidence of effect, as all intervals are centered near 0.
+
+```{r accuracy_model, include=FALSE}
+set.seed(127)  #mean 0.89 starts at 0.02
+m_v_interc_specId <- map2stan(
+  alist(
+    correct ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[dataset_id] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[dataset_id] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan , warmup=1000 , iter=5000 , chains=1 , cores=3)
+```
+
+Let's plot results
+```{r accuracy_model_plots, echo=FALSE, fig.show='hold', out.width='50%'}
+precis(m_v_interc_specId, depth=1, prob=0.95)
+
+# plot(precis(m_v_interc_specId, depth=1, prob=0.95))
+plot_model_mu_coefs(m_v_interc_specId, "Accuracy", TRUE) ## Set TRUE at the end for odds-ratio plots
+ggsave(file="./img/E1/E1_acc_knit_model_plot.svg", plot=plot_model_mu_coefs(m_v_interc_specId, "Accuracy", TRUE), width=10, height=8)
+#odds ratios
+exp(coef(m_v_interc_specId))
+```
+
+## First Trial Accuracy
+
+It is possible that there is a learning effect, or our choice of mark type led participants to focus on a particular stimulus over another. As a result, we analyze accuracy by aggregation strategy and generalization class for the first trial of each particiapnt to better understand the extent of this effect. We find that there appears to be a small difference between the disaggregated and aggregation conditions, although results are not reliably different.
+
+```{r first_trial_accuracy}
+df[df$trial==1,] %>%
+   ddply(c("aggStrat", "insightClass"), summarise,
+     Correct=sum(correct==TRUE),
+     Incorrect=sum(correct==FALSE),
+     Accuracy=Correct/(Incorrect+Correct),
+     Total=Incorrect+Correct)
+```
+
+```{r first_trial_accuracy_plot, echo=FALSE}
+ggplot(df[df$trial==1,], aes(x=aggStrat)) + geom_bar(aes(fill=correct)) +
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+   xlab("Aggregation Strategy") + ylab("Count") +
+   ggtitle("First Trial Accuracy by Aggregation Strategy and Generalization Class") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+# If interested, uncomment plot below to also see a stacked bar chart of first trial displaying aggregation strategy faceted by generaization strategy.
+# df[df$trial==1,] %>%
+#   ddply(c("aggStrat", "insightClass"), summarise,
+#         Correct=sum(correct==TRUE),
+#         Incorrect=sum(correct==FALSE),
+#         PercCorrect=Correct/(Incorrect+Correct),
+#         Total=Incorrect+Correct) %>%
+#   ggplot(aes(x=as.factor(aggStrat), y=Total, fill=insightClass)) + ylim(0, 100) + geom_bar(stat = "identity") +
+#    scale_fill_manual(values = c("#F9AB84", "#A9BEDD", "#218771", "#8D75A1", "#5C4A70", "#F37E8D")) +
+#    xlab("Aggregation Strategy") + ylab("Count") +
+#    ggtitle("Counts of Aggregation Strategy divided by Generalization Class") +
+#    theme_light() + coord_flip() +
+#    theme(plot.title = element_text(face="bold"),
+#       legend.position="top", legend.justification=c(0, 0),
+#       legend.title = element_text(size=8),
+#       legend.background = element_rect(color="gray90"),
+#       legend.spacing = unit(-4, "pt"),
+#       legend.key.size = unit(10, "pt"))
+
+```
+
+```{r first_trial_accuracy_95}
+# Gives us 80 observations, since 10 participants didn't make observations on the first trial
+df_firstTrial_facetWorker_stats <- df[df$trial==1,] %>%
+   ddply(.(aggStrat, workerId), summarise,
+         Correct=sum(correct==TRUE),
+         Incorrect=sum(correct==FALSE),
+         PercCorrect=Correct/(Incorrect+Correct),
+         Total=Incorrect+Correct) %>%
+   ddply(~aggStrat, summarise,
+         N = sum((Total)),
+         meanAcc = mean(PercCorrect),
+         sd = sd(PercCorrect),
+         se = sd / sqrt(N))
+df_firstTrial_facetWorker_stats
+```
+
+```{r first_trial_accuracy_95_plot, echo=FALSE}
+df_firstTrial_facetWorker_stats %>%
+   ggplot(aes(y=meanAcc, x=aggStrat)) +
+      geom_errorbar(aes(ymin=meanAcc-1.96*se, ymax=(meanAcc+1.96*se)), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      xlab("Mean Accuracy") + ylab("Aggregation Strategy") +
+      ggtitle("First Trial Accuracy with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+```
+
+# Confidence
+
+A summary of reported confidence from participants. We first investigate general summary statistics for confidence taking into account individual differences between participants. We find that between aggregation strategies, there are small differences in total mean confidence (disaggregation - 67%, disaggregation+mean - 69%, mean - 72%).
+
+## Confidence by Participant - Aggregation Strategy combination
+
+```{r confidence_participant}
+df %>%
+   ddply(.(aggStrat, workerId), summarise, ## to get confidence per participant
+         N = sum(correct==TRUE, na.rm=TRUE) + sum(correct==FALSE, na.rm=TRUE),
+         correct = sum(correct==TRUE),
+         meanConf = mean(confidence, na.rm=TRUE),
+         sd = sd(confidence),
+         se = sd / sqrt(N)) %>%
+   ddply(~aggStrat, summarise, ## then to average the average confidence per participant
+      Total = sum(N),
+      correct = sum(correct, na.rm=TRUE),
+      meanTotalConf = mean(meanConf, na.rm=TRUE),
+      sdTotal = sd(meanConf),
+      seTotal = sdTotal / sqrt(Total))
+```
+
+```{r confidence_participant_plot, echo=FALSE, fig.show='hold', out.width='50%'}
+df_avgConfPerWorker <- df %>%
+   ddply(.(aggStrat, workerId), summarise,
+         N = sum(correct==TRUE, na.rm=TRUE) + sum(correct==FALSE, na.rm=TRUE),
+         correct = sum(correct==TRUE),
+         meanConf = mean(confidence, na.rm=TRUE),
+         sd = sd(confidence),
+         se = sd / sqrt(N))
+
+df_avgConfPerWorker %>%
+ggplot(mapping = aes(y=meanConf, x=aggStrat, fill=aggStrat)) +
+   geom_boxplot() +
+   geom_jitter(alpha=0.1) +
+   scale_fill_manual(values = c("#F9AB84", "#A9BEDD", "#5C4A70")) +
+   ylab("Confidence") + xlab("Aggregation Strategy") +
+   ggtitle("Confidence per trial per Aggregation Strategy") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.key.size = unit(10, "pt"))
+
+df_avgConfPerWorker %>%
+   ddply(~aggStrat, summarise,
+      Total = sum(N),
+      correct = sum(correct, na.rm=TRUE),
+      meanTotalConf = mean(meanConf, na.rm=TRUE),
+      sdTotal = sd(meanConf),
+      seTotal = sdTotal / sqrt(Total)) %>%
+   ggplot(aes(y=meanTotalConf, x=aggStrat)) +
+      geom_errorbar(aes(ymin=meanTotalConf-1.96*seTotal, ymax=(meanTotalConf+1.96*seTotal)), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      ylab("Mean Confidence") + xlab("Aggregation Strategy") +
+      ggtitle("Mean Confidence with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.key.size = unit(10, "pt"))
+
+df_avgConfPerWorkerInsightClass <- df %>%
+   ddply(.(aggStrat, workerId, insightClass), summarise,
+      N = sum(correct==TRUE, na.rm=TRUE) + sum(correct==FALSE, na.rm=TRUE),
+      correct = sum(correct==TRUE),
+      meanConf = mean(confidence, na.rm=TRUE),
+      sd = sd(confidence),
+      se = sd / sqrt(N))
+
+df_avgConfPerWorkerInsightClass %>%
+    ddply(.(aggStrat, insightClass), summarise,
+          Total = sum(N),
+          correct = sum(correct, na.rm=TRUE),
+          meanTotalConf = mean(meanConf, na.rm=TRUE),
+          sdTotal = sd(meanConf),
+          seTotal = sdTotal / sqrt(Total)) %>%
+    ggplot(aes(y=meanTotalConf, x=aggStrat)) +
+    geom_errorbar(aes(ymin=meanTotalConf-1.96*seTotal, ymax=(meanTotalConf+1.96*seTotal), color=insightClass), width=.1, position=position_dodge(0.3)) +
+    geom_point(aes(color=insightClass), position=position_dodge(0.3)) + coord_flip() +
+    ylab("Mean Confidence") + xlab("Aggregation Strategy") +
+    ggtitle("Mean Confidence with 95% Confidence Intervals") +
+    theme_light() +
+    theme(plot.title = element_text(face="bold"),
+          legend.title = element_text(size=8),
+          legend.background = element_rect(color="gray90"),
+          legend.key.size = unit(10, "pt"))
+```
+
+## Confidence Bayesian Model
+
+We examine how aggregation strategy impacts confidence by again running a Bayesian hierarchical model. We find that there is an effect of the mean aggregation condition on confidence compared to the disaggregated and disaggregated with means condition.
+
+```{r confidence_model, include=FALSE}
+set.seed(123) #make results reproducible
+m_conf_interc <- map2stan(
+  alist(
+    confidence ~ dnorm(mu, sigma) ,
+    mu <- a + a_worker[worker_id] + a_spec[dataset_id] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[dataset_id] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 5),
+    c(sigma, sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan , warmup=1000 , iter=5000 , chains=1 , cores=3 )
+```
+
+```{r precis_confidence_model, echo=FALSE}
+##
+precis(m_conf_interc, depth=2, prob=0.95)@output[keep,]
+# svg(file="conf_model.svg", width=600, height=300)
+# plot(precis(m_conf_interc, prob=0.95))
+# dev.off()
+```
+
+```{r, confidence_model_plot, echo=FALSE}
+plot_model_mu_coefs(m_conf_interc, "Confidence", FALSE) ## Set TRUE at the end for odds-ratio plots
+ggsave(file="./img/E1/E1_conf_knit_model_plot.svg", plot=plot_model_mu_coefs(m_conf_interc, "Confidence", FALSE), width=10, height=8)
+```
+
+One potential confound for the effect that we observe in confidence is the intial confidence slider value each participant saw when they were asked to record their confidence. For each trial, we randomized the initial confidence slider position, as giving a default value could influence the confidence a participant gave. However, it is possible that sampling caused a higher rate of a range of values for a given aggregation condition, which could potentially confound any results we found in the confidence effect. We investigate the effects of this potential confound by plotting the distribution of initial confidence slider positions. We select a bin size of 4, resulting in 25 bins to see the data in a somewhat high resolution. Given the histograms of the distribution for each aggregation strategy, we see that though there is variance, generally initial slider value is the same.
+
+```{r confidence_slider_position_plot, echo=FALSE, fig.show='hold', out.width='50%'}
+ggplot(df, aes(x=initSliderValue)) +
+   geom_histogram(position="identity", colour="grey40", bins = 25) +
+   ylab("Count") + xlab("Initial Confidence Slider Value") +
+   ggtitle("Histogram of Initial Confidence Slider Value") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.key.size = unit(10, "pt"))
+
+
+ggplot(df, aes(x=initSliderValue)) +
+   geom_histogram(position="identity", colour="grey40", bins = 25) +
+   facet_grid(. ~ aggStrat) +
+   ylab("Count") + xlab("Initial Confidence Slider Value") +
+   ggtitle("Histogram of Initial Confidence Slider Value by Aggregation Strategy") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.key.size = unit(10, "pt"))
+```
+
+```{r confidence_slider_position_table}
+df %>%
+   ddply(.(aggStrat), summarise,
+            total = sum(correct==TRUE) + sum(correct==FALSE),
+            meanInitialSliderValue = mean(initSliderValue, na.rm=TRUE),
+            sd = sd(initSliderValue),
+            se = sd / sqrt(total))
+```
+
+```{r confidence_slider_position_table_95_CI, echo=FALSE}
+df %>%
+   ddply(.(aggStrat), summarise,
+            total = sum(correct==TRUE) + sum(correct==FALSE),
+            meanInitialSliderValue = mean(initSliderValue, na.rm=TRUE),
+            sd = sd(initSliderValue),
+            se = sd / sqrt(meanInitialSliderValue)) %>%
+   ggplot(aes(y=meanInitialSliderValue, x=aggStrat)) +
+      geom_errorbar(aes(ymin=meanInitialSliderValue-1.96*se, ymax=meanInitialSliderValue+1.96*se), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      xlab("Aggregation Strategy") + ylab("Mean Initial Confidence Slider Value") +
+      ggtitle("Mean Initial Confidence Slider Value with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=6),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+```
+
+## Accuracy-Confidence Relationship
+
+We perform an exploratory analysis to investigate the relationship between accuracy, confidence and aggregation strategy.
+<!-- In addition, we attempt to better understand any relationships between accuracy and confidence, analyzing results to see if they follow the pattern found in Sanders et al. (2016). -->
+We plot the the average confidence of each worker per aggregation strategy to get a better understanding of the distribution of confidence. Just from plotting all trials and their confidence, we see that consistently, generalizations marked as correct tend to have a higher confidence.
+
+```{r confidence_accuracy_boxplot, echo=FALSE}
+df %>%
+ggplot(mapping = aes(y=confidence, x=correct, fill=correct)) +
+   geom_boxplot() + facet_wrap(~aggStrat) +
+   geom_jitter(alpha=0.1) +
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+   ylab("Confidence") + xlab("Aggregation Strategy") +
+   ggtitle("Confidence per trial per Aggregation Strategy divded by correctness") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.key.size = unit(10, "pt"))
+```
+
+Per our [preregistration](https://osf.io/v87wd/register/5771ca429ad5a1020de2872e), we report on how overall accuracy changes with respect to confidence. We see that accuracy stays relatively consistent when we threshold with the exception of when we consider generalizations where participants report 100 confidence. However, it is unclear if this is a reliable effect, as increasing thresholds of confidence reduce the sample size of generalizations (i.e. the subset of all generalizations of 0 reported confidence or greater will be larger than the subset of generalizations with a value of 100 reported confidence). We investigate this difference by calculating the biserial point correlation between accuracy and confidence.
+```{r accuracy_by_confidence_threshold, echo=FALSE}
+# Slow and definitely not how this should be done, but it works since we have a short list (n=11)
+df_confidence_threshold <- data.frame()
+for(j in 0:10) {
+   df_confidence_threshold <- rbind(df_confidence_threshold, df %>%
+      summarise(confidenceThreshold= j * 10,
+                N=nrow(subset(df, df$confidence >= j * 10)),
+                accuracy=sum(subset(df, df$confidence >= j * 10)$correct==TRUE)/N))
+}
+
+image <- df_confidence_threshold %>%
+   ggplot(aes(x=confidenceThreshold, y=accuracy)) +
+   geom_line() +
+   geom_point() + ylim(0,1) +
+   xlab("Confidence Threshold") + ylab("Mean Accuracy") +
+   ggtitle("Confidence Threshold by Mean Accuracy with 95% Confidence Intervals") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.key.size = unit(10, "pt"))
+
+## 95% or greater confidence
+# df %>%
+#    subset(df$confidence >= 100) %>%
+#    aggregate(by=list(correct), FUN=sum, na.rm=TRUE)
+#
+#    ddply(summarise,
+#         Correct=sum(correct==TRUE),
+#         Incorrect=sum(correct==FALSE),
+#         Accuracy=Correct/(Incorrect+Correct),
+#         Total=Incorrect+Correct)
+```
+
+```{r biserial_confidence_accuracy_setup, include=FALSE}
+# loop through each of our workers
+df_worker_agg <- data.frame(conf=double(), biserial=double(), z=double(), aggStrat=character(), workerId=character())
+df_worker_noagg <- data.frame(conf=double(), biserial=double(), z=double(), aggStrat=character(), workerId=character())
+df_worker_mean <- data.frame(conf=double(), biserial=double(), z=double(), aggStrat=character(), workerId=character())
+
+for(workerId in unique(df$workerId)) {
+   worker_agg <- df[df$aggStrat=="mean" & df$workerId==workerId,]
+   worker_noagg <- df[df$aggStrat=="disagg" & df$workerId==workerId,]
+   worker_mean <- df[df$aggStrat=="disagg+mean" & df$workerId==workerId,]
+
+   if (nrow(worker_agg) > 0 ) {
+      df_worker_agg <- rbind(df_worker_agg, data.frame(sum(worker_agg$confidence) / nrow(worker_agg),
+                 biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1),
+                 z.transform(biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1)),
+                 "mean",
+                 workerId))
+   }
+   if (nrow(worker_noagg) > 0) {
+      df_worker_noagg <- rbind(df_worker_noagg, data.frame(sum(worker_noagg$confidence) / nrow(worker_noagg),
+                 biserial.cor(worker_noagg$confidence, worker_noagg$correct, use = c("complete.obs"), level = 1),
+                 z.transform(biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1)),
+                 "disagg",
+                 workerId))
+      }
+   if (nrow(worker_mean) > 0) {
+      df_worker_mean <- rbind(df_worker_mean, data.frame(sum(worker_mean$confidence) / nrow(worker_mean),
+                 biserial.cor(worker_mean$confidence, worker_mean$correct, use = c("complete.obs"), level = 1),
+                 z.transform(biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1)),
+                 "disagg+mean",
+                 workerId))
+   }
+}
+
+## Change all of our NaN's to 0 correlation. These represent when a worker's observation for a given aggregation type
+## is all marked as correct. Since there is no standard deviation, divide by zero error is introduced, giving NaN.
+
+# helper function to check is.nan in data frames. from https://stackoverflow.com/questions/18142117/how-to-replace-nan-value-with-zero-in-a-huge-data-frame
+is.nan.data.frame <- function(x)
+do.call(cbind, lapply(x, is.nan))
+
+df_worker_agg[is.nan(df_worker_agg)] <- 0
+df_worker_noagg[is.nan(df_worker_noagg)] <- 0
+df_worker_mean[is.nan(df_worker_mean)] <- 0
+
+# Tidy up our column names
+colnames(df_worker_agg) <- c("conf", "biserial", "z","aggStrat", "workerId")
+colnames(df_worker_noagg) <- c("conf", "biserial", "z","aggStrat", "workerId")
+colnames(df_worker_mean) <- c("conf", "biserial", "z","aggStrat", "workerId")
+
+df_worker_CorConf <- do.call("rbind", list(data.frame(), df_worker_agg, df_worker_noagg, df_worker_mean))
+rm(list=c("df_worker_agg", "df_worker_noagg", "df_worker_mean", "worker_agg", "worker_noagg", "worker_mean"))
+```
+
+Because there may be individual differences between how participants use confidence, we first find the average point biserial correlation between confidence and accuracy for each participant-aggregation strategy pair. Then we average these correlations across participants for each aggregation strategy. We interpret when a worker gets all of their observations correct (biserial.cor gives NaN) as 0 correlation. We find that the average correlation between accuracy and confidence across aggregation strategies are not reliably different.
+```{r accuracy-confidence}
+ddply(df_worker_CorConf[df_worker_CorConf$biserial!=0,], ~aggStrat, summarize,
+      avgConf=mean(conf),
+      avgBiserial=mean(biserial),
+      sdConf=sd(conf),
+      sdCorr=sd(biserial),
+      seConf=sdConf/sqrt(length(aggStrat)),
+      seCorr=sdCorr/sqrt(length(aggStrat)))
+```
+
+```{r accuracy-confidence-plots, echo=FALSE, fig.show='hold', out.width='50%'}
+ddply(df_worker_CorConf[df_worker_CorConf$biserial!=0,], ~aggStrat, summarize,
+      avgConf=mean(conf),
+      avgBiserial=mean(biserial),
+      sdConf=sd(conf),
+      sdCorr=sd(biserial),
+      seConf=sdConf/sqrt(length(aggStrat)),
+      seCorr=sdCorr/sqrt(length(aggStrat))) %>%
+   ggplot(aes(y=avgBiserial, x=aggStrat)) +
+      geom_errorbar(aes(ymin=avgBiserial-1.96*seCorr, ymax=(avgBiserial+1.96*seCorr)), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      ylab("Biserial Correlation") + xlab("Aggregation Strategy") +
+      ggtitle("Biserial Corrleation between Confidence and Accuracy with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.key.size = unit(10, "pt"))
+
+## Similarly construct a box plot
+ggplot(df_worker_CorConf[df_worker_CorConf$biserial!=0,], mapping = aes(y=biserial, x=aggStrat, fill=aggStrat)) +
+   geom_boxplot() +
+   geom_jitter(alpha=0.6) +
+   scale_fill_manual(values = c("#F9AB84", "#A9BEDD", "#5C4A70")) +
+   ylab("Biserial Correlation") + xlab("Aggregation Strategy") +
+   ggtitle("Biserial Corrleation between Confidence and Accuracy") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.key.size = unit(10, "pt"))
+```
+
+## First Trial Confidence
+As per our pre-registration, we analyze first trial confidence before participants are aware they will be asked for confidence, in order to to compare confidence between aggregation strategy. We find that on the first trial, aggregation as a mean mark is slightly less accurate and less confident in their generalizations. We plot these results for aid.
+
+```{r first-trial-confidence, include=FALSE}
+# Look at correctness for first trial
+df[df$trial==1,] %>%
+ddply(~aggStrat, summarise,
+      Correct=sum(correct==TRUE),
+      Incorrect=sum(correct==FALSE),
+      PercCorrect=Correct/(Incorrect+Correct),
+      Total=Incorrect+Correct)
+```
+
+```{r first-trial-confidence-plots, echo=FALSE, fig.show='hold', out.width='50%'}
+df[df$trial==1,] %>%
+   ddply(.(aggStrat, workerId), summarise,
+         N = sum(correct==TRUE) + sum(correct==FALSE),
+         correct = sum(correct==TRUE),
+         meanConf = mean(confidence, na.rm=TRUE),
+         sd = sd(confidence),
+         se = sd / sqrt(N)) %>%
+   ddply(~aggStrat, summarise,
+      Total = sum(N),
+      correct = sum(correct),
+      meanTotalConf = mean(meanConf),
+      sdTotal = sd(meanConf),
+      seTotal = sdTotal / sqrt(Total)) %>%
+   ggplot(aes(y=meanTotalConf, x=aggStrat)) +
+      geom_errorbar(aes(ymin=meanTotalConf-1.96*seTotal, ymax=(meanTotalConf+1.96*seTotal)), width=.1, position=position_dodge(0.1)) +
+      geom_point() + coord_flip() +
+      ylab("Mean Confidence") + xlab("Aggregation Strategy") +
+      ggtitle("Mean Confidence with 95% Confidence Intervals") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.key.size = unit(10, "pt"))
+
+
+df[df$trial==1,] %>%
+ggplot(mapping = aes(y=confidence, x=correct, fill=aggStrat)) +
+   geom_boxplot() +
+   geom_jitter(alpha=0.6) +
+   facet_wrap(~aggStrat) +
+   scale_fill_manual(values = c("#F9AB84", "#A9BEDD", "#5C4A70")) +
+   ylab("Confidence") + xlab("Aggregation Strategy") +
+   ggtitle("First Trial Confidence Plotted by Correctness") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.key.size = unit(10, "pt"))
+```
+
+# Effect Magnitude (EM) and Quantitative Prediction (QP) Summary
+
+## Descriptive Statistics
+Now let's look at the two new codes for effect magnitude estimate and quantitative predictions. There are 211 EM generalizations and 991 QP generalizations. There is a greater amount of EM generalizations for the aggregation by default condition. Looking at distributions of both, we find that there are more QP generalizations for the shape class types. Most of these are likely because shape class generalizations included those where the participant noted the shape of a distribution or the size of a bin (i.e. "Ages range from 18 to 68." or "The majority of purchases are between 75 and 175 dollars.")
+
+```{r ES_QP_summary}
+df %>%
+  ddply(~aggStrat, summarise,
+      es = sum(effectSizeMagnitudeRemoveNulls==TRUE, na.rm=TRUE),
+      qp = sum(quantitativePrediction==TRUE, na.rm=TRUE),
+      es_null = sum(effectSizeMagnitude==TRUE & effectSizeMagnitudeRemoveNulls==FALSE, na.rm=TRUE),
+      total = sum(effectSizeMagnitude==TRUE | effectSizeMagnitude==FALSE, na.rm=TRUE),
+      PercES = es/total,
+      PercQP = qp/total,
+      PercES_null = es_null/total,
+      PercES_null_ofES = es_null/es)
+```
+```{r es_qp_summary_plots, echo=FALSE, fig.show='hold', out.width='50%'}
+df %>%
+   ddply(~aggStrat, summarise,
+         Total=sum(correct==FALSE, na.rm=TRUE) + sum(correct==TRUE, na.rm=TRUE),
+         qe=sum(quantitativePrediction==TRUE, na.rm=TRUE),
+         es=sum(effectSizeMagnitudeRemoveNulls==TRUE, na.rm=TRUE)) %>%
+   melt(value.name="Count", variable.name="Variable", na.rm=TRUE) %>%
+   ggplot(aes(x=variable, y=value)) + geom_bar(stat = "identity") + facet_wrap(~aggStrat) +
+      xlab("Aggregation Strategy") + ylab("Count") +
+      ggtitle("Counts by Aggregation Strategy") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"))
+
+df %>%
+   subset(df$quantitativePrediction==TRUE, na.rm=TRUE) %>%
+   ddply(c("aggStrat", "insightClass"), summarise, Total=sum(correct==FALSE) + sum(correct==TRUE)) %>%
+   ggplot(aes(x=as.factor(aggStrat), y=Total)) + geom_bar(stat = "identity") + facet_wrap(~insightClass) +
+      xlab("Aggregation Strategy") + ylab("Count") +
+      ggtitle("QP: Aggregation Strategy Faceted by Generalization Class") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"))
+
+df %>%
+   subset(df$effectSizeMagnitudeRemoveNulls==TRUE, na.rm=TRUE) %>%
+   ddply(c("aggStrat", "insightClass"), summarise, Total=sum(correct==FALSE) + sum(correct==TRUE)) %>%
+   ggplot(aes(x=as.factor(aggStrat), y=Total)) + geom_bar(stat = "identity") + facet_wrap(~insightClass) +
+      xlab("Aggregation Strategy") + ylab("Count") +
+      ggtitle("EM: Aggregation Strategy Faceted by Generalization Class") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"))
+```
+
+Per our preregistration, we run models for both QP and EM to see if there is any effect between aggregation condition and either effect. We see a slight effect in the effect magnitude estimates model, where the disagg condition in particular appears to result in less effect magnitude estimates, however the 95% CI slightly crosses 0 so this effect is not entirely reliable. Similarly, we find no reliable difference in aggregation condition for predicting the quantitative prediction code.
+
+## Quantitative Predictions Bayesian Model
+
+```{r QE_model, include=FALSE}
+dstan_qp <- subset(dstan, dstan$quantitativePrediction!="NA")
+set.seed(123) #make results reproducible
+m_qp_interc_specId <- map2stan(
+  alist(
+    quantitativePrediction ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[dataset_id] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[dataset_id] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan_qp, warmup=1000 , iter=5000 , chains=1 , cores=1 )
+```
+
+```{r precis_QE_model, echo=FALSE}
+##
+precis(m_qp_interc_specId, depth = 2, prob=0.95)@output[keep,]
+#odds ratios
+exp(coef(m_qp_interc_specId))
+# svg(file="qp_model.svg", width=600, height=300)
+# plot(precis(m_qp_interc_specId, prob=0.95))
+# dev.off()
+```
+
+```{r QE_model_plot, echo=FALSE }
+plot_model_mu_coefs(m_qp_interc_specId, "Quantitative Predictions", TRUE) ## Set TRUE at the end for odds-ratio plots
+ggsave(file="./img/E1/E1_QP_knit_model_plot.svg", plot=plot_model_mu_coefs(m_qp_interc_specId, "Quantitative Predictions", TRUE), width=10, height=8)
+```
+
+## Effect Magnitude Bayesian Model
+
+```{r ES_model, include=FALSE}
+dstan_es <- subset(dstan, dstan$effectSizeMagnitude!="NA")
+set.seed(123) #make results reproducible
+m_es_interc_specId <- map2stan(
+  alist(
+    effectSizeMagnitude~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[dataset_id] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[dataset_id] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan_es, warmup=1000 , iter=5000 , chains=1 , cores=1 )
+```   
+
+```{r precis_ES_model, echo=FALSE}
+precis(m_es_interc_specId, depth=2, prob=0.95)@output[keep,]
+exp(coef(m_es_interc_specId))
+```
+
+```{r ES_model_plot, echo=FALSE}
+plot_model_mu_coefs(m_es_interc_specId, "Effect Magnitude Estimate", TRUE) ## Set TRUE at the end for odds-ratio plots
+
+ggsave(file="./img/E1/E1_EM_knit_model_plot.svg", plot=plot_model_mu_coefs(m_es_interc_specId, "Effect Magnitude Estimate", TRUE), width=10, height=8)
+```
+
+## Effect Magnitude Remove Nulls Bayesian Model
+
+```{r ES_model_nonull, include=FALSE}
+dstan_es <- subset(dstan, dstan$effectSizeMagnitudeRemoveNulls!="NA")
+set.seed(123) #make results reproducible
+m_es_nonull_interc_specId <- map2stan(
+  alist(
+    effectSizeMagnitudeRemoveNulls ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[dataset_id] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[dataset_id] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan_es, warmup=1000 , iter=5000 , chains=1 , cores=1 )
+```
+Results
+```{r precis_ES_nonull_model, echo=FALSE}
+precis(m_es_nonull_interc_specId, depth=2, prob=0.95)@output[keep,]
+exp(coef(m_es_nonull_interc_specId))
+```
+Plot
+```{r ES_nonull_model_plot, echo=FALSE}
+plot_model_mu_coefs(m_es_nonull_interc_specId, "Effect Magnitude Estimate", TRUE)## Set TRUE at the end for odds-ratio plots
+# ggsave(file="./img/E1/E1_EM_knit_model_plot.svg", plot=plot_model_mu_coefs(m_es_nonull_interc_specId, "Effect Magnitude Estimate", TRUE), width=10, height=8)
+```
+
+## Dichotomous Descriptive Statistics
+
+We do an exploratory analysis of a code to investigate generalizations that do not include a magnitude of effect, but infer an effect or not (i.e. "Number of time on sites is pretty unrelated to the number of visits" or "Ad Campaign B resulted in the greatest number of purchases"). We find that the mean aggregation strategy has the highest rate of dichotomous thinking, at 38%, vs disaggregation with means at 32%, and finally disaggregation at 30%. This supports our hypothesis that there will be a higher rate of generalizations coded as dichotomous under the mean aggregation condition.
+
+```{r ES_magnitude_dichotomous}
+df %>%
+  subset(df$dichotomous == TRUE, na.rm=TRUE) %>%
+  ddply(.(aggStrat), summarise,
+        total=sum(correct==TRUE)+sum(correct==FALSE),
+        percentOfTotal=total/618,
+        Correct=sum(correct==TRUE),
+        acc=Correct/total) # hard coded from nrow of subset(df$dichotomous == TRUE, na.rm=TRUE)
+
+## Mean accuracy with standard error, taking into account differences between workers
+df %>%
+  subset(df$dichotomous == TRUE, na.rm=TRUE) %>%
+  ddply(.(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE),
+        total=sum(correct==TRUE)+sum(correct==FALSE),
+        correct=sum(correct==TRUE),
+        accuracy=correct/total) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAccuracy = mean(accuracy),
+      sd = sd(accuracy),
+      se = sd / sqrt(N))
+```
+
+```{r ES_magnitude_dichotomous_plots, echo=FALSE, fig.show='hold', out.width='50%'}
+# df %>%
+#   subset(df$dichotomous == TRUE, na.rm=TRUE) %>%
+#   ddply(.(aggStrat, insightClass), summarise,
+#         Correct=sum(correct==TRUE),
+#         total=sum(correct==TRUE)+sum(correct==FALSE),
+#         accuracy=Correct/total)
+
+df %>%
+   subset(df$dichotomous == TRUE, na.rm=TRUE) %>%
+   ggplot(aes(x=aggStrat)) + geom_bar() +
+      scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+      xlab("Aggregation Strategy") + ylab("Count") +
+      ggtitle("Dichotomous: Distribution of Accuracy counts per Aggregation Strategy") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+
+df %>%
+   ddply(~aggStrat, summarise,
+         Total=sum(correct==FALSE, na.rm=TRUE) + sum(correct==TRUE, na.rm=TRUE),
+         Dichot=sum(dichotomous==TRUE, na.rm=TRUE),
+         QP=sum(quantitativePrediction==TRUE, na.rm=TRUE),
+         EM=sum(effectSizeMagnitude==TRUE, na.rm=TRUE)
+         ) %>%
+   melt(value.name="Count", variable.name="Variable", na.rm=TRUE) %>%
+   ggplot(aes(x=variable, y=value)) + geom_bar(stat = "identity") + facet_wrap(~aggStrat) +
+      xlab("Aggregation Strategy") + ylab("Count") +
+      ggtitle("Counts by Aggregation Strategy") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold")) + coord_flip()
+```
+
+## Dichotomous Bayesian Model
+
+```{r dichotomous_model, include=FALSE}
+set.seed(123) #make results reproducible
+m_1000_dichotomous_interc_specId <- map2stan(
+  alist(
+    dichotomous ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[dataset_id] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[dataset_id] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+   c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan, warmup=1000 , iter=5000 , chains=1 , cores=1 )
+```
+
+```{r precis_dichotomous_model, echo=FALSE}
+##
+precis(m_1000_dichotomous_interc_specId, depth = 1, prob=0.95)@output[keep,]
+
+precis(m_1000_dichotomous_interc_specId, depth = 2, prob=0.95)@output[keep,] %>%
+   exp()
+
+#odds ratios
+exp(coef(m_1000_dichotomous_interc_specId))
+# svg(file="qp_model.svg", width=600, height=300)
+# plot(precis(m_qp_interc_specId, prob=0.95))
+# dev.off()
+```
+
+```{r dichotomous_model_plot, echo=FALSE }
+plot_model_mu_coefs(m_1000_dichotomous_interc_specId, "Dichotomous Effects", TRUE)
+exp(precis(m_1000_dichotomous_interc_specId, depth = 2, prob=0.95)@output[keep,])
+ggsave(file="./img/E1/E1_dichotomous_knit_model_plot.svg", plot=plot_model_mu_coefs(m_1000_dichotomous_interc_specId, "Dichotomous Effects", TRUE), width=10, height=8)
+```
+
+## Dichotomous Accuracy Rates
+``` {r ES_magnitude_dichotomous_accuracy_rate, echo=FALSE, fig.show='hold', out.width='50%'}
+df %>%
+  subset(df$dichotomous == TRUE, na.rm=TRUE) %>%
+  ddply(.(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE),
+        total=sum(correct==TRUE)+sum(correct==FALSE),
+        correct=sum(correct==TRUE),
+        acc=correct/total) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N))
+```
+
+
+```{r ES_magnitude_dichotomous_accuracy_plots, echo=FALSE, fig.show='hold', out.width='50%'}
+df %>%
+   subset(df$dichotomous == TRUE, na.rm=TRUE) %>%
+   ggplot(aes(x=aggStrat)) + geom_bar(aes(fill=correct)) +
+      scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) +
+      xlab("Aggregation Strategy") + ylab("Count") +
+      ggtitle("Dichotomous: Distribution of Accuracy counts per Aggregation Strategy") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+
+df %>%
+  subset(df$dichotomous == TRUE, na.rm=TRUE) %>%
+  ddply(.(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE),
+        total=sum(correct==TRUE)+sum(correct==FALSE),
+        correct=sum(correct==TRUE),
+        acc=correct/total) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N)) %>%
+  ggplot(aes(y=meanAcc, x=aggStrat)) +
+   geom_errorbar(aes(ymin=meanAcc-1.96*se, ymax=(meanAcc+1.96*se)), width=.1, position=position_dodge(0.1)) +
+   geom_point() + coord_flip() +
+   xlab("Aggregation Strategy") + ylab("Average Accuracy") +
+   ggtitle("Accuracy of Generalizations When Generalization Descibes Effect Size") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+```

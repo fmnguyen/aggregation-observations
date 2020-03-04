@@ -1,0 +1,1000 @@
+---
+title: "Exploratory Analaysis -- Effect of Aggregation on Observations Study Results"
+author: "Francis Nguyen & Jessica Hullman"
+date: "12/11/2019"
+output:
+   html_document:
+      toc: true
+      toc_float:
+         collapsed: false
+---
+
+```{r setup, include = FALSE}
+# setwd('~/repos/aggregation-observations/') ## set to the parent directory of this file
+library(tidyverse)
+library(devtools)
+library(ggplot2)
+library(prodlim)
+library(readr)
+library(knitr)
+library(plyr)
+library(dplyr)
+library("GeneNet")
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Preliminaries
+
+Change generalizations to the correct path.
+Additionally, we clean up our data, removing rows where the confidence is NA, indicating responses where users chose not to include a generalization. We check the number of total insights, then look at the distribution of omitted generalizations.
+```{r}
+d <- read.csv("./data/[E1]Full-Cleaned-Main.tsv", sep="\t")
+nrow(d)
+
+d$confidence <- suppressWarnings(as.numeric(as.character(paste(d$confidence))))
+d$initSliderValue <- suppressWarnings(as.numeric(as.character(paste(d$initSliderValue))))
+sapply(d, class)
+
+#double check to make sure we have the number of samples required by our power analysis (90 samples to reach at least 80% power)
+unique(d$workerId)
+
+#omit insights that were not decipherable
+df <- subset(d, d$correct!="NA")
+nrow(df) #1746
+
+#convert raw time into average time we can use
+sum(is.na(df$time))
+
+#take out omitted subset and plot it
+omits <- subset(d, is.na(d$correct))
+#see how these were distributed across workers
+p <- ggplot(omits, aes(x=workerId)) + geom_bar()
+p
+```
+looks like we omitted a number of generalizations for some workers.
+
+Next, we add a new column representing the aggregation strategy (agg | noagg | mean). We plot the general distribution of generalizations across generalization class. From the plot, participants made the most shape class generalizations with the noagg condition, the most agg with rank and the most mean with disagg + mean condition. Presumably since participants have to infer the mean given a no-aggregation visualization, they make more generalizations about the observed shape of the distribution. Similarly, since means are plotted, participants may be biased or primed to give some generalization about the mean. Additionally, there are very few variance generalizations, where a participant specifically mentioned the variance of a particular stimulus.
+```{r}
+# test <- d[d$workerId=="AZUHR4TGVXNN",]
+
+df$aggStrat <- as.factor(ifelse(df$specId < 15, "agg", ifelse(df$specId >= 15 & df$specId < 30, "noagg", "mean")))
+
+## Effect size estimates, where we remove the generalizations that reference null effects for the agg condition
+df$isEffectRemoveNulls <- ifelse(df$effectSizePrediction==TRUE & (df$aggStrat!="agg") | df$isEffect==TRUE, TRUE, FALSE)
+
+## Any effect size estimate, including all nulls for all aggregation conditions
+df$isEffect <- df$effectSizePrediction
+
+aggregationInsightClass <- ddply(df, c("aggStrat", "insightClass"), summarise,
+                                 Correct=sum(correct==TRUE),
+                                 Incorrect=sum(correct==FALSE),
+                                 PercCorrect=Correct/(Incorrect+Correct),
+                                 Total=Incorrect+Correct)
+aggregationInsightClass
+
+p <- ggplot(aggregationInsightClass, aes(x=as.factor(aggStrat), y=Total)) + geom_bar(stat = "identity") + facet_wrap(~insightClass)
+p
+```
+
+Now we look at number of instances of generalizations by spec ids to make sure all charts were shown as a sanity check. Since we don't account for each unique account of trial, workerId and specId, it makes sense that some of the specIds are distributed unevenly.
+```{r}
+#insightClassFactor <- as.factor(df$insightClass)
+hist(df$specId, breaks=50)
+```
+
+
+# Generalization Number and Type Analysis
+
+<!-- Let's now look at the number of generalizations per worker. There's quite a range in the number of generalizations participants produce, and a lack thereof. -->
+<!-- ```{r} -->
+<!-- p <- ggplot(df, aes(x=trial)) + geom_bar() + facet_wrap(~workerId) -->
+<!-- p -->
+<!-- ``` -->
+
+<!-- What kind of generalizations did each participant create? -->
+<!-- ```{r} -->
+
+<!-- p <- ggplot(df, aes(x=as.factor(insightClass))) + geom_bar() + facet_wrap(~workerId) -->
+<!-- p -->
+<!-- #looks like no one is giving just one type of insight -->
+<!-- ``` -->
+
+Let's look at generalization count and class by aggregation strategy. Additionally, we facet by the generalization class so we can get a better break down of which are described more. We are curious if there is a learning effect after going through multiple trials. Judging from this plot, however, there doesn't seem to be much of a pattern when looking at the trial number vs the aggregation strategy.
+```{r}
+#count (Each row is insight)
+summary(df$aggStrat)
+summary(df$insightClass)
+# About same # of mean + shape, but much less
+
+p <- ggplot(df, aes(x=trial)) + geom_bar() + facet_wrap(~aggStrat)
+p
+```
+
+### Accuracy by Aggregation Strategy
+We investigate the general numbers for correctness for each of our aggregation strategies to get a better sense of our data. Aggregate by default visualizations have a much lower rate of generalizations, but the percentage difference is quite small between the conditions.
+```{r}
+aggStratCorrect <- ddply(df, ~aggStrat, summarise, Correct=sum(correct==TRUE), Incorrect=sum(correct==FALSE), PercCorrect=Correct/(Incorrect+Correct), Total=Incorrect+Correct)
+aggStratCorrect
+# Doesn't look like we see much different between visualization type. Will have to run a model to check if the different is significant at all
+#   aggStrat Correct Incorrect PercCorrect Total
+#      agg     354       174   0.6704545   528
+#     mean     405       205   0.6639344   610
+#    noagg     399       209   0.6562500   608
+ddply(df, .(insightClass, aggStrat), summarise,
+      Correct=sum(correct==TRUE),
+      Incorrect=sum(correct==FALSE), PercCorrect=Correct/(Incorrect+Correct), Total=Incorrect+Correct, PercTotal=(Incorrect+Correct)/1746)
+
+p <- ggplot(df, aes(x=aggStrat)) + geom_bar(aes(fill=correct))
+p
+```
+
+### Accuracy across aggregation strategy faceted by insight class
+
+Next let's take a look at the break down of insight class with respect to each insight class. We divde into 3 vectors, normalize them, and compare the values across aggregation strategy.
+```{r}
+
+# #means
+# mean_insight <- ddply(df, .(insightClass, aggStrat), summarise, Correct=sum(correct==TRUE), Incorrect=sum(correct==FALSE), PercCorrect=Correct/(Incorrect+Correct), Total=Incorrect+Correct, PercTotal=(Incorrect+Correct)/610)
+#
+# mean_insight <-  mean_insight[mean_insight$aggStrat=="mean",]
+#
+# #noagg
+# noagg_insight <- ddply(df, .(insightClass, aggStrat), summarise, Correct=sum(correct==TRUE), Incorrect=sum(correct==FALSE), PercCorrect=Correct/(Incorrect+Correct), Total=Incorrect+Correct, PercTotal=(Incorrect+Correct)/608)
+# noagg_insight <-  noagg_insight[noagg_insight$aggStrat=="noagg",]
+#
+# #agg
+# agg_insight <- ddply(df, .(insightClass, aggStrat), summarise, Correct=sum(correct==TRUE), Incorrect=sum(correct==FALSE), PercCorrect=Correct/(Incorrect+Correct), Total=Incorrect+Correct, PercTotal=(Incorrect+Correct)/528)
+# agg_insight <-  agg_insight[agg_insight$aggStrat=="agg",]
+#
+# combined_insight_class <- rbind(mean_insight, noagg_insight, agg_insight)
+# combined_insight_class
+
+combined_insight_class <- suppressWarnings(
+  ddply(df, .(aggStrat,insightClass), summarise,
+        Correct=sum(correct==TRUE),
+        Incorrect=sum(correct==FALSE),
+        PercCorrect=Correct/(Incorrect+Correct),
+        Total=Incorrect+Correct,
+        PercTotal=(Incorrect+Correct)/sum(df$aggStrat == aggStrat)))
+combined_insight_class
+
+percentTotal_class_agg <- ddply(combined_insight_class, .(aggStrat, insightClass), summarise, PercTotal=PercTotal)
+percentTotal_class_agg
+
+# agg  - corr 20.3, mean 43.9, rank 17.8, shape 17.8, variance 0.2
+# mean - corr 15.7, mean 39.2, rank 11.3, shape 33.1, variance 0.3
+# disag- corr 13.2, mean 25.0, rank 9.4, shape 52.2, variance 0.2
+
+#make this into a stacked bar chart w facet grid on insightClass
+p <- ggplot(df, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass)
+p
+
+#class
+#p <- ggplot(df, aes(x=as.factor(insightClass))) + geom_bar() + facet_wrap(~aggStrat)
+#p
+
+```
+
+### Basic effect size and quantitative estimate summary
+Now let's look at the two new codes for effectSize estimate and quantitative estimate
+First let's add a new code that is anyEffectSize, which counts quantitative estimate or text effect size estimate
+```{r}
+df$anyEffectSize <- ifelse(df$quantitativePrediction==TRUE | df$effectSizePrediction==TRUE, TRUE, FALSE)
+```
+
+Let's see how these are distributed across workers and aggregation strategy.
+There is a much lower percentage of effect size predictions for the noagg aggregation strategy.
+```{r}
+# how different are things by worker
+# subset to only effectSizePrediction == TRUE
+df_aes <- subset(df, df$anyEffectSize==TRUE)
+nrow(df_aes) ## 1179
+
+df_es <- subset(df, df$effectSizePrediction==TRUE)
+nrow(df_es) #210
+
+# now do the same but for quantitative prediction
+df_qp <- subset(df, df$quantitativePrediction==TRUE)
+nrow(df_qp) #991
+
+# Look at the total number of effect size, quant. prediction and the num of effect size that describes a null effect.
+ddply(df, ~aggStrat, summarise,
+      es = sum(effectSizePrediction==TRUE, na.rm=TRUE),
+      qp = sum(quantitativePrediction==TRUE, na.rm=TRUE),
+      es_null = sum(effectSizePrediction==TRUE & isEffectHasMagnitude==FALSE, na.rm=TRUE),
+      total = sum(effectSizePrediction==TRUE | effectSizePrediction==FALSE, na.rm=TRUE),
+      PercES = es/total,
+      PercQP = qp/total,
+      PercES_null = es_null/total,
+      PercES_null_ofES = es_null/es)
+```
+
+Additionally, let's look at the average confidence per effect size estimate and quantitative estimate.
+There tends to be a lower average confidence for noagg strategy when looking at ES predictions.
+Similarly, there is a smaller difference, but still a lower avg confidence for noagg for QP.
+```{r}
+ddply(df_es, ~aggStrat, summarise, total=sum(effectSizePrediction==TRUE), avgConfidence=sum(confidence)/total)
+ddply(df_qp, ~aggStrat, summarise, total=sum(quantitativePrediction==TRUE), avgConfidence=sum(confidence)/total)
+
+p <- ggplot(df_es, aes(x=as.factor(aggStrat))) + geom_bar()
+p
+#makes sense
+#add correctness
+#p <- ggplot(df_es, aes(x=as.factor(aggStrat))) + geom_bar() + facet_wrap(~correct)
+#p
+#p <- ggplot(df_qp, aes(x=as.factor(workerId))) + geom_bar()
+#p
+
+#p <- ggplot(df_qp, aes(x=as.factor(aggStrat))) + geom_bar()
+#p
+#add correctness
+#p <- ggplot(df_qp, aes(x=as.factor(aggStrat))) + geom_bar() + facet_wrap(~correct)
+#p
+```
+
+### Magnitude of effect size (none vs some effect)
+
+Next, we're interested in effect size estimates with and without the magnitude of effect size -- when coding for ES observations, there were many that mentioned an effect of no magnitude, i.e. "Neither ad is more effective than the other." What percentage of the ES are from this? What about when faceted by observation class?
+
+```{r}
+df_isEffect <- subset(df_es, df_es$isEffect==TRUE)
+
+ddply(df_isEffect, .(aggStrat, insightClass), summarise,
+      count=sum(isEffect==TRUE),
+      total=sum(correct==TRUE)+sum(correct==FALSE),
+      correct=sum(correct==TRUE),
+      acc=correct/total)
+# 67 total observations from 210
+
+p <- ggplot(df_isEffect, aes(x=aggStrat)) + geom_bar(aes(fill=correct))
+p
+
+p <- ggplot(df_isEffect, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass)
+p
+```
+
+
+### Magnitude of effect size, noagg considered
+
+With this, we don't take into account no effect observations where the participant is shown a noagg. When a participant views a noagg stimuli, they can see the distribution of the data points and therefore should be able to see the effect size. We do the above analysis, except accounting for this difference. When we take into account the noagg stimuli that displayed effect size, we notice a large increase in correct responses for correlation observations as well as small increases in correct responses for mean correlation. The correlation observations accuracy jumps from 14.3% to 68% while mean obsesrvation accuracy increase from 50% to 71.4%.
+```{r}
+df_isEffectIncludeNoagg <- subset(df_es, (df_es$noEffect==TRUE & (df_es$aggStrat=="noagg") | df_es$isEffect==TRUE))
+
+ddply(df_isEffectIncludeNoagg, .(aggStrat), summarise, TotalIsEffect=sum(isEffect==TRUE), total=sum(correct==TRUE)+sum(correct==FALSE), correct=sum(correct==TRUE), acc=correct/total)
+
+ddply(df_isEffectIncludeNoagg, .(aggStrat, insightClass), summarise, count=sum(isEffect==TRUE), total=sum(correct==TRUE)+sum(correct==FALSE), correct=sum(correct==TRUE), acc=correct/total)
+# 88 of 210
+
+p <- ggplot(df_isEffectIncludeNoagg, aes(x=aggStrat)) + geom_bar(aes(fill=correct))
+p
+
+p <- ggplot(df_isEffectIncludeNoagg, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass)
+p
+```
+Next, we calculate 95% confidence intervals based on accuracy per each participant, and plot the results.
+```{r}
+ddply(df_isEffectIncludeNoagg, .(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(isEffect==TRUE),
+        total=sum(correct==TRUE)+sum(correct==FALSE),
+        correct=sum(correct==TRUE),
+        acc=correct/total
+      ) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N)
+    ) %>%
+    {.} -> df_isEffect_FacetWorkerId_Stats
+
+df_isEffect_FacetWorkerId_Stats
+
+pd <- position_dodge(0.1)
+p <- ggplot(df_isEffect_FacetWorkerId_Stats, aes(y=meanAcc, x=aggStrat)) +
+   geom_errorbar(aes(ymin=meanAcc-1.96*se, ymax=(meanAcc+1.96*se)), width=.1, position=pd) +
+   geom_point() +
+   coord_flip()
+p
+```
+
+### Magnitude of effect size, noagg and mean considered
+
+```{r}
+df_isEffectIncludeNoaggMean <- subset(df_es, (df_es$isEffect==TRUE | (df_es$noEffect == TRUE & df_es$aggStrat=="mean")))
+
+df_es$isEffectIncludeNulls <- ifelse(df_es$effectSizePrediction==TRUE & (df_es$aggStrat!="agg") | df_es$isEffect==TRUE, TRUE, FALSE)
+
+ddply(df_isEffectIncludeNoaggMean, .(aggStrat), summarise, TotalIsEffect=sum(isEffect==TRUE), total=sum(correct==TRUE)+sum(correct==FALSE), correct=sum(correct==TRUE), acc=correct/total)
+
+ddply(df_isEffectIncludeNoaggMean, .(aggStrat, insightClass), summarise, count=sum(isEffect==TRUE), total=sum(correct==TRUE)+sum(correct==FALSE), correct=sum(correct==TRUE), acc=correct/total)
+# 88 of 210
+
+p <- ggplot(df_isEffectIncludeNoaggMean, aes(x=aggStrat)) + geom_bar(aes(fill=correct))
+p
+
+p <- ggplot(df_isEffectIncludeNoaggMean, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass)
+p
+
+ddply(df_isEffectIncludeNoaggMean, .(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(isEffect==TRUE),
+        total=sum(correct==TRUE)+sum(correct==FALSE),
+        correct=sum(correct==TRUE),
+        acc=correct/total
+      ) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N)
+    ) %>%
+  {.} -> df_isEffect_FacetWorkerId_StatsMean
+
+df_isEffect_FacetWorkerId_StatsMean
+
+prop.test(x=c(8,50),
+          n=c(22,72))
+
+df_isEffect_FacetWorkerId_StatsMean %>%
+  ggplot(aes(y=meanAcc, x=aggStrat)) +
+   geom_errorbar(aes(ymin=meanAcc-1.96*se, ymax=(meanAcc+1.96*se)), width=.1, position=position_dodge(0.1)) +
+   geom_point() +
+   coord_flip() %>%
+  {.} -> p
+
+p
+
+```
+
+# Embedded Ground Truth Accuracy
+Next, we investigate that on a given trial, a participant saw a stimuli that had an embedded ground truth, and correctly identified it as such. Out of 45 total stimuli, 12 had ground truth embedded in them. We see that in the noagg aggregation strategy, correlation classed observations tend to be the most correct, perhaps due to the fact that people are seeing the entire distribution and can therefore more accuractely describe the effect size.
+```{r}
+gt_stimuli <- c(5, 8, 11, 14, 20, 23, 26, 29, 35, 38, 41, 44)
+df_groundtruth <- subset(df, df$specId %in% gt_stimuli)
+# 552 observations. More or less what we expect numerically (~a bit more than a quarter of 1746)
+
+ddply(df_groundtruth, .(aggStrat, insightClass),
+      summarise, total=sum(correct==TRUE)+sum(correct==FALSE),
+      correct=sum(correct==TRUE),
+      acc=correct/total)
+
+p <- ggplot(df_groundtruth, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass)
+p
+
+p <- ggplot(df_groundtruth, aes(x=insightClass)) + geom_bar(aes(fill=correct)) + facet_wrap(~aggStrat)
+p
+```
+When we ignore aggregation
+```{r}
+
+
+```
+
+Similarly, we are curious if when there is a ground truth, whether participants recorded an effect size in their observation. There's so little data that it's hard to glean anything from the plot generated.
+```{r}
+df_groundtruth_es <- subset(df_groundtruth, df_groundtruth$effectSizePrediction==TRUE)
+
+ddply(df_groundtruth_es, .(aggStrat, insightClass), summarise,
+      count=sum(isEffect==TRUE),
+      total=sum(correct==TRUE)+sum(correct==FALSE),
+      correct=sum(correct==TRUE),
+      acc=correct/total)
+
+p <- ggplot(df_groundtruth_es, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass)
+p
+
+```
+
+
+## Effect Magnitude Remove Nulls Accuracy Analysis
+
+```{r ES_magnitude_effectSizeMagnitude}
+df %>%
+  subset(df$effectSizeMagnitudeRemoveNulls == TRUE, na.rm=TRUE) %>% 
+  ddply(.(aggStrat), summarise, 
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE), 
+        total=sum(correct==TRUE)+sum(correct==FALSE), 
+        correct=sum(correct==TRUE), 
+        acc=correct/total) 
+
+## Mean accuracy with standard error, taking into account differences between workers
+df %>% 
+  subset(df$effectSizeMagnitudeRemoveNulls == TRUE, na.rm=TRUE) %>%
+  ddply(.(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE), 
+        total=sum(correct==TRUE)+sum(correct==FALSE), 
+        correct=sum(correct==TRUE), 
+        acc=correct/total) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N))
+```
+
+```{r ES_magnitude_effectSizeMagnitude_plot, echo=FALSE, fig.show='hold', out.width='50%'}
+df %>%
+  subset(df$effectSizeMagnitudeRemoveNulls == TRUE, na.rm=TRUE) %>% 
+  ggplot(aes(x=aggStrat)) + geom_bar(aes(fill=correct))+ 
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) + 
+   ylab("Count") + xlab("Aggregation Strategy") +
+   ggtitle("Effect Magnitude Accuracy (Remove Nulls)") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+df %>%
+  subset(df$effectSizeMagnitudeRemoveNulls == TRUE, na.rm=TRUE) %>% 
+   ggplot(aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass) +
+      scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) + 
+      xlab("Aggregation Strategy") + ylab("Count") +
+      ggtitle("Effect Magnitude Accuracy by Aggregation Strategy and Generalization Class") +
+      theme_light() +
+      theme(plot.title = element_text(face="bold"),
+         legend.title = element_text(size=8),
+         legend.background = element_rect(color="gray90"),
+         legend.spacing = unit(-4, "pt"),
+         legend.key.size = unit(10, "pt"))
+
+df %>% 
+  subset(df$effectSizeMagnitudeRemoveNulls == TRUE, na.rm=TRUE) %>%
+  ddply(.(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE), 
+        total=sum(correct==TRUE)+sum(correct==FALSE), 
+        correct=sum(correct==TRUE), 
+        acc=correct/total) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N)) %>% 
+  ggplot(aes(y=meanAcc, x=aggStrat)) +
+   geom_errorbar(aes(ymin=meanAcc-1.96*se, ymax=(meanAcc+1.96*se)), width=.1, position=position_dodge(0.1)) + 
+   geom_point() + coord_flip() + 
+   xlab("Aggregation Strategy") + ylab("Average Accuracy") +
+   ggtitle("Accuracy of Effect Magnitude") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+```
+
+```{r ES_magnitude_effectSizeMagnitudenull}
+## Subset our original data frame based on the removing the null effect values,
+## then calculate a 95% confidence interval for error bars
+df %>% 
+  subset(df$effectSizeMagnitudeRemoveNulls == FALSE, na.rm=TRUE) %>%
+  ddply(.(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE), 
+        total=sum(correct==TRUE)+sum(correct==FALSE), 
+        correct=sum(correct==TRUE), 
+        acc=correct/total) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N))
+```
+
+```{r ES_magnitude_effectSizeMagnitudenull_plots, echo=FALSE, fig.show='hold', out.width='50%'}
+df %>%
+  subset(df$effectSizeMagnitudeRemoveNulls == FALSE, na.rm=TRUE) %>% 
+  ggplot(aes(x=aggStrat)) + geom_bar(aes(fill=correct)) +
+   scale_fill_manual(values = c("#F37E8D", "#2E4D6F")) + 
+   xlab("Aggregation Strategy") + ylab("Count") +
+   ggtitle("Distribution of Magnitude of Effect Size Estimate Remove Nulls") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+
+df %>% 
+  subset(df$effectSizeMagnitudeRemoveNulls == FALSE, na.rm=TRUE) %>%
+  ddply(.(workerId, aggStrat), summarise,
+        TotalIsEffect=sum(effectSizeMagnitude==TRUE), 
+        total=sum(correct==TRUE)+sum(correct==FALSE), 
+        correct=sum(correct==TRUE), 
+        acc=correct/total) %>%
+  ddply(~aggStrat, summarise,
+      N = sum((total)),
+      meanAcc = mean(acc),
+      sd = sd(acc),
+      se = sd / sqrt(N)) %>% 
+  ggplot(aes(y=meanAcc, x=aggStrat)) +
+   geom_errorbar(aes(ymin=meanAcc-1.96*se, ymax=(meanAcc+1.96*se)), width=.1, position=position_dodge(0.1)) + 
+   geom_point() + coord_flip() + 
+   xlab("Aggregation Strategy") + ylab("Average Accuracy") +
+   ggtitle("Accuracy of Effect Size Estimates Describing Null Effect") +
+   theme_light() +
+   theme(plot.title = element_text(face="bold"),
+      legend.title = element_text(size=8),
+      legend.background = element_rect(color="gray90"),
+      legend.spacing = unit(-4, "pt"),
+      legend.key.size = unit(10, "pt"))
+```
+
+
+# Confidence
+Let's take a look at distribution of confidence recorded by participants,
+There seems to be a lot of confidence values of 0.
+```{r}
+confidence <- as.numeric(subset(df$confidence, as.numeric(df$confidence) >= 0))
+hist(confidence, breaks=20)
+length(confidence[confidence>90]) #429 out of 1736 or 24.7\%
+length(confidence)
+
+ddply(df, ~aggStrat, summarise, mean_conf=mean(confidence, na.rm=TRUE), sd_conf=sd(confidence, na.rm=TRUE))
+
+df_agg <- subset(df, df$aggStrat=="agg")
+df_noagg <- subset(df, df$aggStrat=="noagg")
+df_mean <- subset(df, df$aggStrat=="mean")
+```
+
+Are there any relationships between the confidence and how correct a participant is?
+
+```{r}
+conf_table2 <- ddply(df, c("aggStrat", "correct"), summarise, conf=mean(confidence, na.rm=TRUE))
+
+p <- ggplot(conf_table2, aes(x=as.factor(aggStrat), y=conf)) + geom_col() + facet_wrap(~correct)
+p
+
+df_c <- subset(df, df$correct==1)
+df_i <- subset(df, df$correct==0)
+
+ddply(df_c, ~aggStrat, summarise, conf_c=mean(confidence, na.rm=TRUE))
+ddply(df_i, ~aggStrat, summarise, conf_i=mean(confidence, na.rm=TRUE))
+```
+
+
+Could accuracy rates by aggregation strategy be confounded by different numbers of generalizations per aggregation strategy?
+```{r}
+ddply(df, ~aggStrat, summarise, Correct=sum(correct==TRUE), Incorrect=sum(correct==FALSE), Total=sum(Correct+Incorrect), PercCorrect=Correct/Total )
+#there are fewer agg insights - people are more cautious when they see no representation of uncertainty. Mean and agg are very similar on percent correct, but noagg is lower, perhaps because people do a lot of mean insights and noagg contributes extra judgment error bc they have to infer mean
+
+```
+
+Plot from above for context
+```{r}
+p <- ggplot(df_es, aes(x=as.factor(aggStrat))) + geom_bar()
+p
+```
+
+## Confidence by aggregation strategy
+
+This only means so much when we look at the confidence of the entire dataset.
+Let's now consider confidence with respect to each worker.
+We loop over all the workers, and find the biserial correlation, and average that across the dataset.
+We interpret when a worker gets all of their observations correct (biserial.cor gives NaN) as 0 correlation.
+```{r}
+library(ltm)
+biserial.cor(df_agg$confidence, df_agg$correct, use = c("complete.obs"), level = 1)
+biserial.cor(df_noagg$confidence, df_noagg$correct, use = c("complete.obs"), level = 1)
+biserial.cor(df_mean$confidence, df_mean$correct, use = c("complete.obs"), level = 1)
+
+# loop through each of our workers
+df_worker_agg <- data.frame(conf=double(), biserial=double(), z=double(), aggStrat=character(), workerId=character())
+df_worker_noagg <- data.frame(conf=double(), biserial=double(), z=double(), aggStrat=character(), workerId=character())
+df_worker_mean <- data.frame(conf=double(), biserial=double(), z=double(), aggStrat=character(), workerId=character())
+
+for(workerId in unique(df$workerId)) {
+   worker_agg <- df[df$aggStrat=="agg" & df$workerId==workerId,]
+   worker_noagg <- df[df$aggStrat=="disagg" & df$workerId==workerId,]
+   worker_mean <- df[df$aggStrat=="mean" & df$workerId==workerId,]
+
+   if (nrow(worker_agg) > 0 ) {
+      df_worker_agg <- rbind(df_worker_agg, data.frame(sum(worker_agg$confidence) / nrow(worker_agg),
+                 biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1),
+                 z.transform(biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1)),
+                 "agg",
+                 workerId))
+   }
+   if (nrow(worker_noagg) > 0) {
+      df_worker_noagg <- rbind(df_worker_noagg, data.frame(sum(worker_noagg$confidence) / nrow(worker_noagg),
+                 biserial.cor(worker_noagg$confidence, worker_noagg$correct, use = c("complete.obs"), level = 1),
+                 z.transform(biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1)),
+                 "disagg",
+                 workerId))
+      }
+   if (nrow(worker_mean) > 0) {
+      df_worker_mean <- rbind(df_worker_mean, data.frame(sum(worker_mean$confidence) / nrow(worker_mean),
+                 biserial.cor(worker_mean$confidence, worker_mean$correct, use = c("complete.obs"), level = 1),
+                 z.transform(biserial.cor(worker_agg$confidence, worker_agg$correct, use = c("complete.obs"), level = 1)),
+                 "mean",
+                 workerId))
+   }
+}
+
+## Change all of our NaN's to 0 correlation. These represent when a worker's observation for a given aggregation type
+## is all marked as correct. Since there is no standard deviation, divide by zero error is introduced, giving NaN.
+
+# helper function to check is.nan in data frames. from https://stackoverflow.com/questions/18142117/how-to-replace-nan-value-with-zero-in-a-huge-data-frame
+is.nan.data.frame <- function(x)
+do.call(cbind, lapply(x, is.nan))
+#
+df_worker_agg[is.nan(df_worker_agg)] <- 0
+df_worker_noagg[is.nan(df_worker_noagg)] <- 0
+df_worker_mean[is.nan(df_worker_mean)] <- 0
+
+# Tidy up our column names
+colnames(df_worker_agg) <- c("conf", "biserial", "z","aggStrat", "workerId")
+colnames(df_worker_noagg) <- c("conf", "biserial", "z","aggStrat", "workerId")
+colnames(df_worker_mean) <- c("conf", "biserial", "z","aggStrat", "workerId")
+
+# Finally, concat all the different data frames together
+# df_worker_CorConf <- rbind(data.frame(), df_worker_agg, df_worker_noagg, df_worker_mean)
+
+df_worker_CorConf <- do.call("rbind", list(data.frame(), df_worker_agg, df_worker_noagg, df_worker_mean))
+
+#do an analysis of average correlation/confidence but where you take into account the fact that workers may differ from one another
+#loop through all workers
+#group their confidence by aggregation strategy (3 dataframes with two cols, confidence and correct, each)
+#find biserial cor for each group for that worker
+#append the biserial cors to 3 arrays that record each individual worker cor for that aggreattion strategy.
+#Finally, find the mean cor across all workers for each aggreation strategy and calculate a confidence interval on it (mean +/- 1.96 * sd)
+```
+
+The first plot we view is the number of sets of conditions removed by NaN to get a better sense of the data. It is hard to interpret this number, as a participant could have gotten all the generalizations correct or all incorrect given the aggregation type.
+```{r}
+# View number of instances where workers got a correlation of 0,
+# or got the same correctness for all observations of a given agg strat
+omits_CorConf <- df_worker_CorConf[df_worker_CorConf$biserial==0,]
+
+p <- ggplot(omits_CorConf, aes(x=aggStrat)) + geom_bar()
+p
+```
+
+Next, we view the general statistics for correlation when we take participant differences into account.
+There doesn't to be a huge significant difference between average confidence and correlation.
+```{r}
+df_worker_avgCorConf <- ddply(df_worker_CorConf, ~aggStrat, summarize,
+                              count=length(aggStrat),
+                              avgConf=sum(conf) / length(aggStrat),
+                              avgBiserial=sum(biserial)/length(aggStrat),
+                              sdConf=sd(conf),
+                              sdCorr=sd(biserial),
+                              seCorr=sdConf/sqrt(length(aggStrat)),
+                              seCorr=sdCorr/sqrt(length(aggStrat)))
+
+df_worker_avgCorConf
+# There doesn't seem to be a very significant difference between average confidence and the correlation...
+
+# The errorbars overlapped, so use position_dodge to move them horizontally
+pd <- position_dodge(0.1) # move them .05 to the left and right
+
+p <- ggplot(df_worker_avgCorConf, aes(y=avgBiserial, x=aggStrat)) +
+   geom_errorbar(aes(ymin=avgBiserial-1.96*seCorr, ymax=(avgBiserial+1.96*seCorr)), width=.1, position=pd) +
+   geom_point() +
+   coord_flip()
+p
+
+## Next construct a box plot so we can see where everything lies
+ggplot(df_worker_CorConf, mapping = aes(y=biserial, x=aggStrat, fill=aggStrat)) +
+   geom_boxplot() +
+  # geom_jitter(pch="-", size=4) +
+   geom_jitter(alpha=0.6)
+   # stat_summary(fun.y=mean, geom="point", size=3) +
+   # facet_grid(. ~ aggStrat)
+
+## Let's do the same, but remove the biserial correlations of 0
+df_withoutNoCorr <- ddply(df_worker_CorConf[df_worker_CorConf$biserial!=0,], ~aggStrat, summarize,
+                          avgConf=sum(conf) / length(aggStrat),
+                          avgBiserial=sum(biserial)/length(aggStrat),
+                          sdConf=sd(conf),
+                          sdCorr=sd(biserial),
+                          seCorr=sdConf/sqrt(length(aggStrat)),
+                          seCorr=sdCorr/sqrt(length(aggStrat)))
+
+df_withoutNoCorr
+
+p <- ggplot(df_withoutNoCorr, aes(y=avgBiserial, x=aggStrat)) +
+   geom_errorbar(aes(ymin=avgBiserial-1.96*seCorr, ymax=(avgBiserial+1.96*seCorr)), width=.1, position=pd) +
+   geom_point() +
+   coord_flip()
+p
+
+## Similarly construct a box plot
+ggplot(df_worker_CorConf[df_worker_CorConf$biserial!=0,], mapping = aes(y=biserial, x=aggStrat, fill=aggStrat)) +
+   geom_boxplot() +
+  # geom_jitter(pch="-", size=4) +
+   geom_jitter(alpha=0.6)
+
+```
+
+### First Trial Confidence
+
+Additionally, we will look at the first trial, when the idea of asking for confidence is first elicited to the worker.
+This might give us a better sense of how someone repsonds when first asked for confidence with regard to their answer.
+```{r}
+#Also, do an analysis of first trial responses, where trial = 1.
+#Look at the aggStrat distribution of first trial, confidence by aggStrat, QP/ES first trial
+# subset data so you only look at first trial
+df_firstTrial <- df[df$trial==1,]
+# at first glance, the distribution of first trial confidence is similar to that of the entire set
+hist(df_firstTrial$confidence, breaks=20)
+```
+
+Let's look at the distribution across aggergation strategy and class. The distribution we get seems to be pretty similar to when we plot the distribution of all the data.
+```{r}
+summary(df_firstTrial$aggStrat)
+# Here's the correctness faceted by the aggregation strategy
+# There are the most amount of no aggregate generalizations.
+p <- ggplot(df_firstTrial, aes(x=aggStrat)) + geom_bar(aes(fill=correct))
+p
+
+# And now the same, except faceted by insight class. There aren't any variance generalizations on the first trial.
+p <- ggplot(df_firstTrial, aes(x=aggStrat)) + geom_bar(aes(fill=correct)) + facet_wrap(~insightClass)
+p
+
+# There are less generalizations on first trial for agg
+
+# Look at correctness for first trial
+ddply(df_firstTrial, ~aggStrat, summarise,
+      Correct=sum(correct==TRUE),
+      Incorrect=sum(correct==FALSE),
+      PercCorrect=Correct/(Incorrect+Correct),
+      Total=Incorrect+Correct)
+
+ggplot(df_firstTrial, mapping = aes(y=confidence, x=correct, fill=aggStrat)) +
+   geom_boxplot() +
+   geom_jitter(alpha=0.6) +
+   facet_wrap(~aggStrat)
+```
+For the first trial alone, there seem to be a greater difference of correctness percentage. All 3 aggregation strategies hovered around 65-70% accurate for all trials, and here, agg does worse by a decent margin — 60% compared to 75.5% for dis-aggregated.
+
+#### First Trial Confidence faceted by workerId
+When we take into account workers, we find that only 80/90 participants gave us observations on the first trial, even though there are a total of 111 observations. We find that the aggregation strategy accuracy rating changes slightly, but agg still does the worst: 60.4% foragg compared to 69.6% for mean and 73.8% for noagg.
+
+We calculate the se and plot the values below.
+```{r}
+# Interesting... gives us 80 observations, since 10 participants didn't make observations ont the first trial
+df_firstTrial_facetWorker <- ddply(df_firstTrial, .(aggStrat, workerId), summarise, Correct=sum(correct==TRUE), Incorrect=sum(correct==FALSE), PercCorrect=Correct/(Incorrect+Correct), Total=Incorrect+Correct)
+
+df_firstTrial_facetWorker_stats <- ddply(df_firstTrial_facetWorker, ~aggStrat, summarise,
+        N = sum((Total)),
+        meanAcc = mean(PercCorrect),
+        sd = sd(PercCorrect),
+        se = sd / sqrt(N)
+      )
+
+df_firstTrial_facetWorker_stats
+# aggStrat  N    mean         sd          se
+# agg	      25	  0.6041667	  0.4885464	  0.09770927
+# mean	    41	  0.6964286	  0.4582431	  0.07156555
+# noagg	    45	  0.7380952	  0.4112076	  0.06129921
+
+pd <- position_dodge(0.1)
+p <- ggplot(df_firstTrial_facetWorker_stats, aes(y=meanAcc, x=aggStrat)) +
+   geom_errorbar(aes(ymin=meanAcc-1.96*se, ymax=(meanAcc+1.96*se)), width=.1, position=pd) +
+   geom_point() +
+   coord_flip()
+p
+```
+
+Now, lets take a quick look at the QP/ES/ES null descriptive statistics.
+```{r}
+# Look at df_firstTrial$aggStrat, df_firstTrial$confidence, df_firstTrial$correct
+# df_firstTrial$quantitativePrediction, df_firstTrial$effectSizePrediction, etc.
+
+ddply(df_firstTrial, ~aggStrat, summarise,
+      es=sum(effectSizePrediction==TRUE, na.rm=TRUE),
+      qp=sum(quantitativePrediction==TRUE, na.rm=TRUE),
+      es_null=sum(effectSizePrediction==TRUE & noEffect==TRUE, na.rm=TRUE),
+      total=sum(effectSizePrediction==TRUE | effectSizePrediction==FALSE, na.rm=TRUE),
+      PercES=es/total,
+      PercQP=qp/total,
+      PercES_null=es_null/total)
+
+```
+
+
+# Bayesian models
+```{r}
+library(rethinking)
+
+#data prep
+myvars <- c("workerId", "aggStrat", "specId", "correct", "trial", "isEffect", "isEffectRemoveNulls", "quantitativePrediction", "confidence", "datasetId")
+dstan <- df[myvars]
+dstan$aggr <- ifelse(dstan$aggStrat=="agg", 1, 0)
+dstan$mmean <- ifelse(dstan$aggStrat=="mean", 1, 0)
+dstan$noaggr <- ifelse(dstan$aggStrat=="noagg", 1, 0)
+dstan$worker_id <- as.integer(as.factor(dstan$workerId))
+
+# summary(dstan$worker_id)
+
+#for (i in 1:nrow(dstan)){
+#  if(dstan$worker_id[i] >= 49) {
+#    dstan$worker_id[i] <- dstan$worker_id[i]-1
+#  }
+#}
+
+#dstan$worker_id <- as.integer(dstan$worker_id)
+dstan$spec_ID <- dstan$specId + 1
+
+dstan$spec_id <- dstan$datasetId
+# summary(dstan$spec_id)
+
+dstan$spec_id <- as.integer(paste(dstan$spec_id))
+# summary(dstan$spec_id)
+
+```
+
+Create a plotting function so that we can view our models as violin plots.
+```{r}
+#plotting code
+plot_model_mu_coefs = function(m) {
+
+   #only keep the following columns since we don't want each
+   keep <- c("a", "btrial", "bnoagg", "bmean", "sigma_spec", "sigma_worker")
+   #m_v_interc_specId
+
+  mu_coefs <- m %>%
+    extract.samples() %>%  #only want intercept, btrial, bnoagg, bmean, sigma spec, sigma worker, each of these is a column
+    as.data.frame() #%>%
+
+  # mu_coefs[ , !names(mu_coefs) %in% remove]
+   # transmute(
+  #    intercept = Intercept,
+     # discrete = mu_bd,
+    #  predict = mu_bp,
+    #  `discrete*predict` = mu_bdp,
+    #  rules = mu_br,
+  #    trial = trial
+   # ) #%>%
+
+
+   mu_coefs_plot <- gather(data=mu_coefs[keep], key=item, value=value)
+   mu_coefs_plot %>%
+      ggplot(aes(x = reorder(item, desc(item)), y = value)) +
+      geom_violin(fill = "black", color = NA) +
+      theme(axis.text=element_text(size=18),
+         panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+         panel.background = element_rect(fill = "white", color="grey50")) +
+      labs(x = "Coefficients (mu)", y = "") + coord_flip()
+}
+```
+
+## Accuracy Model
+```{r}
+set.seed(127)  #mean 0.89 starts at 0.02
+m_v_interc_specId <- map2stan(
+  alist(
+    correct ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[spec_ID] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[spec_ID] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan , warmup=1000 , iter=5000 , chains=1 , cores=3)
+
+##
+precis(m_v_interc_specId, depth = 2, prob=0.95)
+# svg(file="acc_model.svg", width=600, height=300)
+# plot(precis(m_v_interc_specId, prob=0.95))
+# dev.off()
+
+plot_model_mu_coefs(m_v_interc_specId)
+```
+
+## Effect Size Estimates Model
+```{r}
+
+summary(dstan$isEffect)
+
+set.seed(123) #make results reproducible
+m_es_interc_specId <- map2stan(
+  alist(
+    isEffect ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[spec_ID] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[spec_ID] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan, warmup=1000 , iter=5000 , chains=1 , cores=1 )
+
+##
+precis(m_es_interc_specId, prob=0.95)
+plot_model_mu_coefs(m_es_interc_specId)
+
+```
+
+## Effect Size Estimates Remove Nulls from Agg Model
+```{r}
+dstan_es_nonull <- subset(dstan, dstan$isEffect!="NA")
+
+set.seed(123) #make results reproducible
+m_es_nonull_interc_specId <- map2stan(
+  alist(
+    isEffectRemoveNulls ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[spec_ID] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[spec_ID] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan_es_nonull , warmup=1000 , iter=5000 , chains=1 , cores=1 )
+
+##
+precis(m_es_nonull_interc_specId, prob=0.95)
+plot_model_mu_coefs(m_es_nonull_interc_specId)
+
+```
+
+## Quantitative Estimates Model
+```{r}
+dstan_qp <- subset(dstan, dstan$quantitativePrediction!="NA")
+
+set.seed(123) #make results reproducible
+m_qp_interc_specId <- map2stan(
+  alist(
+    quantitativePrediction ~ dbinom(1, p) ,
+    logit(p) <- a + a_worker[worker_id] + a_spec[spec_ID] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[spec_ID] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 10),
+    c(sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan_qp, warmup=1000 , iter=5000 , chains=1 , cores=1 )
+
+##
+precis(m_qp_interc_specId, depth = 2, prob=0.95)
+# svg(file="qp_model.svg", width=600, height=300)
+# plot(precis(m_qp_interc_specId, prob=0.95))
+# dev.off()
+#               Mean StdDev lower 0.95 upper 0.95 n_eff Rhat
+# a             0.70   0.81      -0.87       2.30   498 1.00
+# bnoagg        0.80   1.13      -1.32       3.16   565 1.00
+# bmean         0.46   1.17      -1.86       2.70   420 1.01
+# btrial       -0.02   0.02      -0.05       0.02  4000 1.00
+# sigma_worker  1.45   0.16       1.16       1.75  2002 1.00
+# sigma_spec    3.09   0.45       2.34       4.07  1346 1.00
+
+# Most recent model run after fixing original data
+# a             0.73   0.84      -0.86       2.38   589    1
+# bnoagg        0.74   1.17      -1.48       3.12   496    1
+# bmean         0.49   1.18      -1.90       2.69   522    1
+# btrial       -0.02   0.02      -0.06       0.02  4000    1
+# sigma_worker  1.46   0.16       1.15       1.79  2442    1
+# sigma_spec    3.09   0.44       2.28       3.93  1894    1
+
+plot_model_mu_coefs(m_qp_interc_specId)
+```
+
+## Confidence Model
+```{r}
+set.seed(123) #make results reproducible
+m_conf_interc <- map2stan(
+  alist(
+    confidence ~ dnorm(mu, sigma) ,
+    mu <- a + a_worker[worker_id] + a_spec[spec_id] + btrial * trial + bnoagg*noaggr + bmean*mmean,
+    a_worker[worker_id] ~ dnorm(0, sigma_worker),
+    a_spec[spec_id] ~ dnorm(0, sigma_spec),
+    c(a, bnoagg, bmean, btrial) ~ dnorm(0, 5),
+    c(sigma, sigma_worker, sigma_spec) ~ dcauchy(0, 1)
+  ),
+  data=dstan, warmup=1000 , iter=5000 , chains=1 , cores=3 )
+
+##
+precis(m_conf_interc, prob=0.95)
+# svg(file="conf_model.svg", width=600, height=300)
+# plot(precis(m_conf_interc, prob=0.95))
+# dev.off()
+
+#               Mean StdDev lower 0.95 upper 0.95 n_eff Rhat
+# a             5.94   5.13      -3.76      16.74   329 1.01
+# bnoagg       -3.51   1.30      -6.13      -1.02  4000 1.00
+# bmean        -2.17   1.31      -4.79       0.26  4000 1.00
+# btrial       -0.24   0.13      -0.50       0.01  4000 1.00
+# sigma        22.84   0.40      22.06      23.62  4000 1.00
+# sigma_worker 16.32   1.32      13.91      19.02  4000 1.00
+# sigma_spec   67.02  13.99      42.89      94.38  4000 1.00
+
+plot_model_mu_coefs(m_conf_interc)
+```
