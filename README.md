@@ -8,4 +8,9 @@ You can use these R markdown documents and the anonymized data files provided in
 
 These markdown files walk through the thought process behind our analyses and provide many additional figures in order to help provide additional context for interpreting the findings we present in the paper.
 
-If you lack an interpreter for R markdown, find also supplied pre-knit html documents. [E1]Main_Results.html and [E2]Main_Results.html are web-documents that compile the R Markdown for view in a web browser.
+If you lack an interpreter for R markdown, find also supplied pre-knit html documents. 
+[E1]Main_Results.html and [E2]Main_Results.html are web-documents that compile the R Markdown for view in a web browser.
+
+You may access these files also at: 
+**Experiment 1:** https://fmnguyen.github.io/aggregation-observations/supplementary_material/Supplement-[E1]Main_Results.html
+**Experiment 2:** https://fmnguyen.github.io/aggregation-observations/supplementary_material/Supplement-[E2]Main_Results.html
